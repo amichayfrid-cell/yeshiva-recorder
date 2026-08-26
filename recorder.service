@@ -8,13 +8,12 @@ Type=simple
 # Update User and WorkingDirectory to match your actual server environment
 User=amichay
 WorkingDirectory=/opt/yeshiva-recorder
-ExecStart=/usr/bin/python3 main.py
+ExecStart=/opt/yeshiva-recorder/venv/bin/python3 main.py --all
 Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
 Environment=PYTHONUNBUFFERED=1
-Environment=HF_TOKEN=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
 
 [Install]
 WantedBy=multi-user.target

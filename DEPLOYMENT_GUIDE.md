@@ -90,22 +90,43 @@ sudo ./install.sh
 
 ---
 
-## 🧪 שלב 4: בדיקת תקינות המערכת לאחר ההתקנה (Verification)
+## 🌐 שלב 4: חיבור לשרת הקבצים של הישיבה (Windows Server SMB)
 
-1. **בדיקת מודלים:**
-   - הרץ סריקה ראשונית:
-     ```bash
-     python main.py --scan
-     ```
-   - ודא שאין שגיאות טעינה של Whisper או התחברות ל-Ollama.
+כדי לחבר את שרת ההקלטות לשרת ה-Windows הראשי (`\\mdserver\שיעורי שמע\שיעורים למיון`):
+
+1. הרץ את סקריפט החיבור האוטומטי:
+   ```bash
+   sudo ./setup_smb_mount.sh
+   ```
+2. הסקריפט יבקש ממך:
+   * שם משתמש וסיסמה של משתמש ה-Windows הייעודי לשרת.
+   * סיסמת מנהל עבור ממשק ה-Web (ברירת מחדל: `1234`).
+3. הסקריפט יגדיר עגינה קבועה ב-`/etc/fstab`, ייצור את תיקיית `שיעורים למיון` בשרת, וישמור את ההגדרות ב-`.env`.
+
+---
+
+## 💻 שלב 5: התקנת תפריט לחיצה ימנית על מחשבי הישיבה (Client Tools)
+
+כדי לאפשר לתלמידים להשאיר הערה ישירות מסייר הקבצים של Windows:
+
+1. העתק את התיקייה `client_tools` על גבי דיסק-און-קי.
+2. הכנס את ה-DOK לכל מחשב בישיבה והרץ בלחיצה כפולה את **`install.bat`** (או לחץ פעמיים על `install_context_menu.reg`).
+3. מעכשיו, בלחיצה ימנית על כל קובץ שמע (`.mp3`, `.wav`, `.m4a`) יופיע: **"📝 השאר הערה לאחראי שיעורים"** שיפתח את הדפדפן להזנת הערה.
+
+---
+
+## 🧪 שלב 6: בדיקת תקינות המערכת לאחר ההתקנה (Verification)
+
+1. **הפעלת המערכת המלאה (שירות האזנה + ממשק Web):**
+   ```bash
+   python main.py --all
+   ```
+   * ממשק הניהול של האחראי זמין בכתובת: `http://<כתובת_שרת>:8000/admin` (סיסמה מוגדרת ב-`.env`).
+   * ממשק התלמידים זמין בכתובת: `http://<כתובת_שרת>:8000/student`.
 
 2. **בדיקת שאיבת מקלטים (USB Ingestion):**
-   - חבר מקלט שמע / דיסק און קי עם הקלטת ניסיון לשקע ה-USB.
-   - הרץ את שירות שאיבת ה-USB:
-     ```bash
-     python test_usb_ingest.py
-     ```
-   - ודא שהקובץ הועבר ל-`data/incoming/`, מוין ל-`data/sorted/`, ונמחק מהמקלט (אם מוגדר `USB_DELETE_AFTER_INGEST = True`).
+   - חבר מקלט שמע / DOK עם הקלטת ניסיון לשקע ה-USB.
+   - ודא שהקובץ הועבר ל-`incoming/`, אומת ונמחק מהמקלט מיד, עובד ונשלח ישירות אל `\\mdserver\שיעורי שמע\שיעורים למיון`.
 
 3. **הרצת מבחן 50 השיעורים וניתוח ביצועים (Benchmark):**
    - לאחר עיבוד קבוצת שיעורים, הרץ את כלי הניתוח:
@@ -123,9 +144,14 @@ sudo ./install.sh
 
 | פעולה | פקודה ב-Ubuntu | פקודה ב-Windows |
 | :--- | :--- | :--- |
-| **משיכת עדכונים מ-GitHub** | `git pull origin main` | `git pull origin main` |
-| **בדיקת סטטוס שירות** | `sudo systemctl status recorder.service` | `tasklist \| findstr python` |
+| **משיכת עדכונים מ-GitHub** | `git pull origin feature/web-management` | `git pull origin feature/web-management` |
+| **הפעלת מערכת מלאה (Watcher + Web)** | `python main.py --all` | `python main.py --all` |
+| **הפעלת שרת Web בלבד** | `python main.py --web` | `python main.py --web` |
+| **שינוי סיסמת מנהל ל-Web** | `python set_admin_password.py` | `python set_admin_password.py` |
+| **חיבור/עגינת שרת ה-Windows** | `sudo ./setup_smb_mount.sh` | מובנה בווינדוס |
+| **בדיקת סטטוס שירות systemd** | `sudo systemctl status recorder.service` | `tasklist \| findstr python` |
 | **צפייה בלוגים חיים** | `journalctl -u recorder.service -f` | צפייה בחלון ה-CMD |
 | **ניתוח דוח ביצועים ודיוק** | `python analyze_benchmark.py` | `python analyze_benchmark.py` |
 | **איפוס נתונים לבדיקות** | `python reset_data.py` | `python reset_data.py` |
-| **סריקת שאיבה חד-פעמית** | `python test_usb_ingest.py` | `python test_usb_ingest.py` |
+| **יצירת נתוני הדמיה לבדיקות** | `python populate_mock_data.py` | `python populate_mock_data.py` |
+
