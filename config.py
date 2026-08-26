@@ -8,8 +8,16 @@ DATA_DIR = BASE_DIR / "data"
 INCOMING_DIR = DATA_DIR / "incoming"
 SORTED_DIR = DATA_DIR / "sorted"
 NEEDS_REVIEW_DIR = DATA_DIR / "needs_review"
+STAGING_DIR = DATA_DIR / "staging"  # Offline buffer when network share is temporarily disconnected
 HISTORY_FILE = DATA_DIR / "history.json"
 MAX_HISTORY_ENTRIES = 500  # Maximum number of records to retain in history.json
+
+# Network Share (Windows Server - SMB / CIFS) Configuration
+USE_NETWORK_SHARE = os.getenv("USE_NETWORK_SHARE", "False").lower() in ("true", "1", "yes")
+SMB_SERVER_HOST = os.getenv("SMB_SERVER_HOST", "mdserver")
+SMB_SHARE_NAME = os.getenv("SMB_SHARE_NAME", "שיעורי שמע")
+SMB_MOUNT_POINT = Path(os.getenv("SMB_MOUNT_POINT", "/mnt/shiurei_shema"))
+SMB_TARGET_SUBDIR_NAME = "שיעורים למיון"  # Target directory on the share for all processed files
 
 # Speech-to-Text (STT) Configuration - ivrit.ai specialized Hebrew Whisper Large Turbo (Local Offline Model)
 STT_MODEL_NAME = str(BASE_DIR / "ivrit_model")
@@ -67,7 +75,7 @@ USB_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".wma"}
 
 def ensure_directories():
     """Ensures that all necessary directories exist."""
-    for directory in [INCOMING_DIR, SORTED_DIR, NEEDS_REVIEW_DIR]:
+    for directory in [INCOMING_DIR, SORTED_DIR, NEEDS_REVIEW_DIR, STAGING_DIR]:
         directory.mkdir(parents=True, exist_ok=True)
 
 # Automatically ensure directories on import

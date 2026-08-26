@@ -18,6 +18,7 @@ from core.file_manager import (
     cleanup_temp_files
 )
 from core.usb_ingest import start_usb_daemon
+from core.network_share import get_active_target_dir, sync_staging_to_network, is_share_mounted
 
 SUPPORTED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".wma"}
 
@@ -95,7 +96,11 @@ def process_single_audio_file(filepath: Path) -> Path:
         original_extension=ext,
         file_dt=file_dt
     )
-    target_dir = config.SORTED_DIR if is_identified else config.NEEDS_REVIEW_DIR
+    if config.USE_NETWORK_SHARE:
+        target_dir, is_net_active = get_active_target_dir()
+    else:
+        target_dir = config.SORTED_DIR if is_identified else config.NEEDS_REVIEW_DIR
+
     unique_target_path = get_unique_filepath(target_dir, target_filename)
 
     print(f"[Pipeline 4/4] Moving to: {unique_target_path}")
@@ -144,8 +149,13 @@ def start_watching(poll_interval: float = 3.0) -> None:
     print("=" * 60)
     print(f"[*] Recording Automation Watcher is ACTIVE (ivrit-ai + Gemma 4)")
     print(f"[*] Monitoring directory: {config.INCOMING_DIR}")
-    print(f"[*] Target Sorted directory: {config.SORTED_DIR}")
-    print(f"[*] Target Review directory: {config.NEEDS_REVIEW_DIR}")
+    if config.USE_NETWORK_SHARE:
+        mounted = is_share_mounted(config.SMB_MOUNT_POINT)
+        status_str = "CONNECTED" if mounted else "OFFLINE (Staging Active)"
+        print(f"[*] Windows Server Share: {config.SMB_MOUNT_POINT / config.SMB_TARGET_SUBDIR_NAME} [{status_str}]")
+    else:
+        print(f"[*] Target Sorted directory: {config.SORTED_DIR}")
+        print(f"[*] Target Review directory: {config.NEEDS_REVIEW_DIR}")
     print(f"[*] Poll interval: {poll_interval} seconds. Press Ctrl+C to stop.")
     print("=" * 60)
 
@@ -159,6 +169,8 @@ def start_watching(poll_interval: float = 3.0) -> None:
 
     try:
         while True:
+            if config.USE_NETWORK_SHARE:
+                sync_staging_to_network()
             process_inbox()
             time.sleep(poll_interval)
     except KeyboardInterrupt:
