@@ -1,19 +1,38 @@
+# Python & Virtual Environment
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+venv/
+env/
+.venv/
+.env
+
+# Large Models & Weights
+ivrit_model/
+*.aria2
+dcaa7ecd*
+
+# Audio & Media Files
 *.mp3
 *.wav
 *.m4a
 *.aac
 *.ogg
 *.wma
-*.aria2
-dcaa7ecd*
+
+# Temporary & Working Files
+.tmp/
+tmp*
+*.log
+benchmark_*.md
+benchmark_*.json
+
+# Data Directories & Logs (Preserve folder structure with .gitkeep)
 data/incoming/*
 data/sorted/*
 data/needs_review/*
+data/history.json
+data/simulated_usb/
 !data/incoming/.gitkeep
 !data/sorted/.gitkeep
 !data/needs_review/.gitkeep
-data/simulated_usb/
-.tmp/
-tmp*
