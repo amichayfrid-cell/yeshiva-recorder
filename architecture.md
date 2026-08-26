@@ -14,14 +14,12 @@ d:\מיון שיעורים
 ├── install.sh                  # סקריפט התקנה מהיר לאובונטו סרבר.
 ├── setup_windows.bat           # סקריפט התקנה מהיר לווינדוס.
 ├── requirements.txt            # רשימת התלויות של Python לפרויקט.
-├── reset_data.py               # סקריפט עזר להחזרת כל השיעורים הממוינים חזרה ל-incoming עם שמותיהם המקוריים.
-├── test_id3.py                 # סקריפט בדיקה להצגת תגיות ID3 (אמן, כותרת, תאריך) בקבצים הממוינים.
-├── test_usb_ingest.py          # סקריפט בדיקה, סימולציה וסריקה לצינור שאיבת USB.
 ├── analyze_benchmark.py        # סקריפט ניתוח דוחות ביצועים ומדדי דיוק על בסיס history.json למבחן 50 השיעורים.
 ├── setup_smb_mount.sh          # סקריפט התקנה והגדרת עגינה אוטומטית (fstab) לשרת הקבצים של הישיבה (Windows Server).
+├── set_admin_password.py       # כלי אינטראקטיבי להגדרת סיסמת מנהל לממשק ה-Web.
 ├── .smbcredentials.example    # תבנית קובץ אימות מאובטח למשתמש שרת ה-Windows.
 ├── recorder.service            # קובץ שירות systemd מוכן להפעלה רציפה ב-Ubuntu Server.
-├── main.py                     # סקריפט הריצה הראשי (הפעלת שירות האזנה או ריצה מיידית).
+├── main.py                     # סקריפט הריצה הראשי (הפעלת שירות האזנה, שרת Web או שניהם יחד).
 ├── core/                       # מודולי הליבה של המערכת.
 │   ├── __init__.py
 │   ├── audio_processor.py      # חיתוך ועיבוד אודיו ראשוני באמצעות ffmpeg.
@@ -37,6 +35,7 @@ d:\מיון שיעורים
 │   ├── server.py               # שרת ה-API ומזרים האודיו ללא הורדה.
 │   └── static/                 # קבצי ממשק משתמש (HTML, CSS, JS) לאחראי ולתלמידים.
 ├── client_tools/               # כלי קצה עבור מחשבי הישיבה (ווינדוס).
+│   ├── install.bat             # סקריפט התקנה בלחיצה אחת למחשבי הישיבה.
 │   └── install_context_menu.reg # סקריפט Registry להוספת כפתור "השאר הערה" בלחיצה ימנית.
 └── data/                       # תיקיות המידע והסימולציה המקומית.
     ├── incoming/               # תיקיית קליטה (מדמה מקלטי שמע).
@@ -63,19 +62,15 @@ d:\מיון שיעורים
    דואג לשלמות הקבצים (Checksum SHA256), מונע דריסת קבצים בעלי שם זהה, מטמיע תגיות מטא-דאטה ID3 (אמן, כותרת ואלבום עברי), ומנהל העברה בטוחה.
 7. **Watcher (`core/watcher.py`):**
    מנהל את זרימת המידע המלאה מקצה לקצה.
-8. **Reset Utility (`reset_data.py`):**
-   מחזיר באופן אוטומטי את כל קבצי השמע מתיקיות היעד חזרה לתיקיית `data/incoming/`, משחזר את שמותיהם המקוריים ומאפס את קובץ ההיסטוריה.
-9. **Benchmark Analyzer (`analyze_benchmark.py`):**
+8. **Benchmark Analyzer (`analyze_benchmark.py`):**
    מנתח את קובץ הלוגים `data/history.json` לאחר עיבוד סדרות שיעורים (כגון מבחן 50 השיעורים), ומפיק מדדי דיוק, התפלגות רבנים, זמני עיבוד, וטבלאות מעמיקות.
-10. **Network Share Manager (`core/network_share.py`):**
-    מנהל את החיבור לשרת הקבצים של הישיבה (`\\mdserver\שיעורי שמע\שיעורים למיון`), מבצע בדיקות תקינות כתיבה (Health Check), ומנהל מנגנון Staging מקומי חכם שמונע אובדן שיעורים בזמן ניתוקי רשת ומסנכרן אוטומטית ברגע שהשרת מחובר.
-11. **Web Admin Dashboard (`web/server.py` & `web/frontend/admin/`):**
+9. **Network Share Manager (`core/network_share.py`):**
+   מנהל את החיבור לשרת הקבצים של הישיבה (`\\mdserver\שיעורי שמע\שיעורים למיון`), מבצע בדיקות תקינות כתיבה (Health Check), ומנהל מנגנון Staging מקומי חכם שמונע אובדן שיעורים בזמן ניתוקי רשת ומסנכרן אוטומטית ברגע שהשרת מחובר.
+10. **Web Admin Dashboard (`web/server.py` & `web/frontend/admin/`):**
     ממשק ניהול נקי ופרקטי המאפשר לאחראי השיעורים להאזין לקבצים (Streaming) ללא הורדה, ולשנות את שמם ותגיות ה-ID3 שלהם. מוגן בסיסמת מנהל מלאה. הגישה מתבצעת מדפדפן סטנדרטי.
-12. **Student Portal & Context Menu (`web/frontend/student/` & `client_tools/install_context_menu.reg`):**
+11. **Student Portal & Context Menu (`web/frontend/student/` & `client_tools/install_context_menu.reg`):**
     מנגנון המאפשר לתלמידים להשאיר הערות ישירות מסייר הקבצים בווינדוס (על ידי לחיצה ימנית על קובץ שמע), ללא צורך בהזדהות או התקנת תוכנה.
-13. **Mock Data Generator (`populate_mock_data.py`):**
-    סקריפט עזר ליצירת הדמיה מקומית מלאה (קבצי שמע לדוגמה ופניות תלמידים מדומות) לבדיקת ממשק ה-Web ללא תלות בשרת הישיבה.
-14. **Password Configuration Utility (`set_admin_password.py`):**
+12. **Password Configuration Utility (`set_admin_password.py`):**
     כלי אינטראקטיבי להגדרה ושינוי מאובטח של סיסמת המנהל לממשק ה-Web (שמירה ב-.env).
 
 > [!NOTE]

@@ -152,6 +152,4 @@ sudo ./install.sh
 | **בדיקת סטטוס שירות systemd** | `sudo systemctl status recorder.service` | `tasklist \| findstr python` |
 | **צפייה בלוגים חיים** | `journalctl -u recorder.service -f` | צפייה בחלון ה-CMD |
 | **ניתוח דוח ביצועים ודיוק** | `python analyze_benchmark.py` | `python analyze_benchmark.py` |
-| **איפוס נתונים לבדיקות** | `python reset_data.py` | `python reset_data.py` |
-| **יצירת נתוני הדמיה לבדיקות** | `python populate_mock_data.py` | `python populate_mock_data.py` |
 
