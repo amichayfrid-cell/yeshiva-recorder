@@ -4,3 +4,6 @@ pyluach
 faster-whisper
 mutagen
 psutil
+fastapi
+uvicorn[standard]
+python-multipart

@@ -1,6 +1,13 @@
 import os
 from pathlib import Path
 
+# Load environment variables from .env if present
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # Base Paths
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -10,7 +17,14 @@ SORTED_DIR = DATA_DIR / "sorted"
 NEEDS_REVIEW_DIR = DATA_DIR / "needs_review"
 LOCAL_BUFFER_DIR = DATA_DIR / "local_buffer"  # Local storage buffer before verified transfer to Yeshiva Server
 HISTORY_FILE = DATA_DIR / "history.json"
+NOTES_FILE = DATA_DIR / "notes.json"  # Student feedback and alerts storage
 MAX_HISTORY_ENTRIES = 500  # Maximum number of records to retain in history.json
+
+# Web Dashboard & Management API Configuration
+WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
+WEB_PORT = int(os.getenv("WEB_PORT", "8000"))
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "1234")  # Admin access password
+STATIC_DIR = BASE_DIR / "web" / "static"
 
 # Network Share (Windows Server - SMB / CIFS) Configuration
 USE_NETWORK_SHARE = os.getenv("USE_NETWORK_SHARE", "False").lower() in ("true", "1", "yes")
@@ -60,12 +74,6 @@ KNOWN_RABBIS = [
     "הרב צבי קוסטינר",
     "הרב קובי דביר",
     "הרב שמריהו הופמן",
-    # השמות הקצרים הנפוצים בדיבור:
-    "הרב שמריהו",
-    "הרב ערן",
-    "הרב אמיר",
-    "הרב אורי",
-    "הרב אודי"
 ]
 
 # USB Ingestion Configuration
@@ -75,7 +83,7 @@ USB_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".wma"}
 
 def ensure_directories():
     """Ensures that all necessary directories exist."""
-    for directory in [INCOMING_DIR, SORTED_DIR, NEEDS_REVIEW_DIR, LOCAL_BUFFER_DIR]:
+    for directory in [INCOMING_DIR, SORTED_DIR, NEEDS_REVIEW_DIR, LOCAL_BUFFER_DIR, STATIC_DIR]:
         directory.mkdir(parents=True, exist_ok=True)
 
 # Automatically ensure directories on import

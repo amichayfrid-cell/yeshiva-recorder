@@ -88,3 +88,19 @@ else
     echo "המערכת תעבוד בינתיים במצב Staging מקומי ותסנכרן אוטומטית ברגע שהשרת יחובר."
     echo "============================================================"
 fi
+
+# 7. Configure Admin Web Password (.env)
+echo ""
+echo "🔐 הגדרת סיסמת מנהל לממשק ה-Web (Admin Dashboard):"
+read -s -p "הזן סיסמת כניסה לממשק ה-Web (הקש Enter לברירת מחדל 1234): " WEB_PASS
+echo ""
+WEB_PASS="${WEB_PASS:-1234}"
+
+ENV_FILE="$(dirname "$0")/.env"
+if grep -q "ADMIN_PASSWORD=" "$ENV_FILE" 2>/dev/null; then
+    sed -i "s/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=$WEB_PASS/" "$ENV_FILE"
+else
+    echo "ADMIN_PASSWORD=$WEB_PASS" >> "$ENV_FILE"
+fi
+echo "✓ סיסמת המנהל עודכנה בהצלחה!"
+

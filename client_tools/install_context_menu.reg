@@ -1,0 +1,35 @@
+Windows Registry Editor Version 5.00
+
+; ==============================================================================
+; Yeshiva Audio Recorder - Student Feedback Windows Context Menu Integration
+; Adds "השאר הערה לאחראי שיעורים" to audio files right-click menu
+; ==============================================================================
+
+[HKEY_CLASSES_ROOT\SystemFileAssociations\audio\shell\YeshivaShiurNote]
+@="📝 השאר הערה לאחראי שיעורים"
+"Icon"="shell32.dll,269"
+
+[HKEY_CLASSES_ROOT\SystemFileAssociations\audio\shell\YeshivaShiurNote\command]
+@="rundll32.exe url.dll,FileProtocolHandler \"http://mdserver:8000/student?file=%1\""
+
+; Specific Extension Associations for maximum compatibility
+[HKEY_CLASSES_ROOT\SystemFileAssociations\.mp3\shell\YeshivaShiurNote]
+@="📝 השאר הערה לאחראי שיעורים"
+"Icon"="shell32.dll,269"
+
+[HKEY_CLASSES_ROOT\SystemFileAssociations\.mp3\shell\YeshivaShiurNote\command]
+@="rundll32.exe url.dll,FileProtocolHandler \"http://mdserver:8000/student?file=%1\""
+
+[HKEY_CLASSES_ROOT\SystemFileAssociations\.wav\shell\YeshivaShiurNote]
+@="📝 השאר הערה לאחראי שיעורים"
+"Icon"="shell32.dll,269"
+
+[HKEY_CLASSES_ROOT\SystemFileAssociations\.wav\shell\YeshivaShiurNote\command]
+@="rundll32.exe url.dll,FileProtocolHandler \"http://mdserver:8000/student?file=%1\""
+
+[HKEY_CLASSES_ROOT\SystemFileAssociations\.m4a\shell\YeshivaShiurNote]
+@="📝 השאר הערה לאחראי שיעורים"
+"Icon"="shell32.dll,269"
+
+[HKEY_CLASSES_ROOT\SystemFileAssociations\.m4a\shell\YeshivaShiurNote\command]
+@="rundll32.exe url.dll,FileProtocolHandler \"http://mdserver:8000/student?file=%1\""
