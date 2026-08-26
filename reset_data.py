@@ -32,7 +32,7 @@ def reset_files(restore_original_names: bool = True, clear_history: bool = True)
     orig_map = get_original_name_map() if restore_original_names else {}
     
     moved_count = 0
-    source_dirs = [config.SORTED_DIR, config.NEEDS_REVIEW_DIR, config.STAGING_DIR]
+    source_dirs = [config.SORTED_DIR, config.NEEDS_REVIEW_DIR, config.LOCAL_BUFFER_DIR]
 
     for source_dir in source_dirs:
         if not source_dir.exists():

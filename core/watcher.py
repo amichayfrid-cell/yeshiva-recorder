@@ -18,7 +18,11 @@ from core.file_manager import (
     cleanup_temp_files
 )
 from core.usb_ingest import start_usb_daemon
-from core.network_share import get_active_target_dir, sync_staging_to_network, is_share_mounted
+from core.network_share import (
+    is_share_mounted,
+    transfer_to_network_share,
+    sync_local_buffer_to_network
+)
 
 SUPPORTED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".wma"}
 
@@ -46,14 +50,16 @@ def get_file_timestamp(filepath: Path) -> datetime:
 
 def process_single_audio_file(filepath: Path) -> Path:
     """
-    Executes the complete production pipeline on a single audio file:
+    Executes the complete transactional production pipeline on a single audio file:
     1. Extracts original recording timestamp.
-    2. Slices the first N seconds.
+    2. Slices the first 35 seconds.
     3. Transcribes Hebrew speech via ivrit-ai Whisper STT.
     4. Extracts Rabbi + Topic via Gemma 4 LLM.
     5. Standardizes filename with Hebrew date.
-    6. Safely moves with SHA-256 verification.
-    7. Logs history.
+    6. Safely moves from incoming to local_buffer (verifies SHA-256 & cleans incoming).
+    7. Embeds ID3 tags into the local buffer audio file.
+    8. If network share active: transfers to Windows Server (שיעורים למיון) & verifies SHA-256.
+    9. Logs processing history.
     """
     start_time = time.time()
     print(f"\n" + "=" * 60)
@@ -65,7 +71,7 @@ def process_single_audio_file(filepath: Path) -> Path:
     file_dt = get_file_timestamp(filepath)
 
     # Step 1: Cut audio slice
-    print(f"[Pipeline 1/4] Truncating audio ({config.AUDIO_CLIP_DURATION_SEC}s)...")
+    print(f"[Pipeline 1/5] Truncating audio ({config.AUDIO_CLIP_DURATION_SEC}s)...")
     temp_cut_path = None
     try:
         temp_cut_path = cut_audio(str(filepath), duration_sec=config.AUDIO_CLIP_DURATION_SEC)
@@ -76,7 +82,7 @@ def process_single_audio_file(filepath: Path) -> Path:
     transcript = ""
     if temp_cut_path:
         try:
-            print(f"[Pipeline 2/4] Transcribing Hebrew audio with ivrit-ai ASR...")
+            print(f"[Pipeline 2/5] Transcribing Hebrew audio with ivrit-ai ASR...")
             transcript = transcribe_audio(temp_cut_path)
         except Exception as e:
             print(f"[Pipeline] STT error: {e}")
@@ -87,34 +93,44 @@ def process_single_audio_file(filepath: Path) -> Path:
                 pass
 
     # Step 3: Entity Extraction with Gemma 4
-    print(f"[Pipeline 3/4] Extracting Rabbi and Topic with Gemma 4...")
+    print(f"[Pipeline 3/5] Extracting Rabbi and Topic with Gemma 4...")
     metadata = extract_metadata_from_text(transcript)
 
-    # Step 4: Determine filename and safe move
+    # Step 4: Determine standardized filename & save to local buffer
     target_filename, is_identified = generate_target_filename(
         metadata,
         original_extension=ext,
         file_dt=file_dt
     )
-    if config.USE_NETWORK_SHARE:
-        target_dir, is_net_active = get_active_target_dir()
-    else:
-        target_dir = config.SORTED_DIR if is_identified else config.NEEDS_REVIEW_DIR
 
-    unique_target_path = get_unique_filepath(target_dir, target_filename)
+    buffer_target_path = get_unique_filepath(config.LOCAL_BUFFER_DIR, target_filename)
+    print(f"[Pipeline 4/5] Moving raw file to local buffer: {buffer_target_path.name}")
+    buffered_path = safe_move(str(filepath), buffer_target_path)
 
-    print(f"[Pipeline 4/4] Moving to: {unique_target_path}")
-    final_path = safe_move(str(filepath), unique_target_path)
-
-    # Step 5: Embed ID3 tags into audio file
+    # Step 5: Embed ID3 tags into the buffered audio file
     if is_identified:
         apply_id3_tags(
-            filepath=final_path,
+            filepath=buffered_path,
             metadata=metadata,
             hebrew_date_str=get_hebrew_date_str(file_dt)
         )
 
-    # Step 6: Record history
+    # Step 6: Transfer and verify to destination
+    final_path = buffered_path
+    if config.USE_NETWORK_SHARE:
+        print(f"[Pipeline 5/5] Transferring to Yeshiva Server share ({config.SMB_TARGET_SUBDIR_NAME})...")
+        server_path = transfer_to_network_share(buffered_path)
+        if server_path:
+            final_path = server_path
+        else:
+            print(f"[Pipeline 5/5] Share offline. File preserved in local buffer: {buffered_path.name}")
+    else:
+        # Local development / offline mode
+        target_local_dir = config.SORTED_DIR if is_identified else config.NEEDS_REVIEW_DIR
+        local_unique = get_unique_filepath(target_local_dir, target_filename)
+        final_path = safe_move(str(buffered_path), local_unique)
+
+    # Step 7: Record history
     duration_sec = round(time.time() - start_time, 2)
     record_history(
         original_filename=original_name,
@@ -170,7 +186,7 @@ def start_watching(poll_interval: float = 3.0) -> None:
     try:
         while True:
             if config.USE_NETWORK_SHARE:
-                sync_staging_to_network()
+                sync_local_buffer_to_network()
             process_inbox()
             time.sleep(poll_interval)
     except KeyboardInterrupt:

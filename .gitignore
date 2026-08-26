@@ -27,12 +27,19 @@ tmp*
 benchmark_*.md
 benchmark_*.json
 
+# SMB / Network Share Credentials
+.smbcredentials
+*.smbcredentials
+
 # Data Directories & Logs (Preserve folder structure with .gitkeep)
 data/incoming/*
 data/sorted/*
 data/needs_review/*
+data/local_buffer/*
 data/history.json
 data/simulated_usb/
 !data/incoming/.gitkeep
 !data/sorted/.gitkeep
 !data/needs_review/.gitkeep
+!data/local_buffer/.gitkeep
+

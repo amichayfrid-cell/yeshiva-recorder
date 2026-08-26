@@ -8,7 +8,7 @@ DATA_DIR = BASE_DIR / "data"
 INCOMING_DIR = DATA_DIR / "incoming"
 SORTED_DIR = DATA_DIR / "sorted"
 NEEDS_REVIEW_DIR = DATA_DIR / "needs_review"
-STAGING_DIR = DATA_DIR / "staging"  # Offline buffer when network share is temporarily disconnected
+LOCAL_BUFFER_DIR = DATA_DIR / "local_buffer"  # Local storage buffer before verified transfer to Yeshiva Server
 HISTORY_FILE = DATA_DIR / "history.json"
 MAX_HISTORY_ENTRIES = 500  # Maximum number of records to retain in history.json
 
@@ -75,7 +75,7 @@ USB_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".wma"}
 
 def ensure_directories():
     """Ensures that all necessary directories exist."""
-    for directory in [INCOMING_DIR, SORTED_DIR, NEEDS_REVIEW_DIR, STAGING_DIR]:
+    for directory in [INCOMING_DIR, SORTED_DIR, NEEDS_REVIEW_DIR, LOCAL_BUFFER_DIR]:
         directory.mkdir(parents=True, exist_ok=True)
 
 # Automatically ensure directories on import
