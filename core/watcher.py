@@ -54,6 +54,7 @@ def process_single_audio_file(filepath: Path) -> Path:
     6. Safely moves with SHA-256 verification.
     7. Logs history.
     """
+    start_time = time.time()
     print(f"\n" + "=" * 60)
     print(f"[Pipeline] Processing: {filepath.name}")
     print("=" * 60)
@@ -109,16 +110,18 @@ def process_single_audio_file(filepath: Path) -> Path:
         )
 
     # Step 6: Record history
+    duration_sec = round(time.time() - start_time, 2)
     record_history(
         original_filename=original_name,
         final_filepath=final_path,
         status="sorted" if is_identified else "needs_review",
         metadata={
             **metadata,
-            "transcript": transcript
+            "transcript": transcript,
+            "duration_sec": duration_sec
         }
     )
-    print(f"[Pipeline] ✓ Done: {final_path.name}")
+    print(f"[Pipeline] ✓ Done: {final_path.name} ({duration_sec}s)")
     return final_path
 
 def process_inbox() -> List[Path]:
