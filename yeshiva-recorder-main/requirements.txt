@@ -1,0 +1,6 @@
+requests
+gTTS
+pyluach
+faster-whisper
+mutagen
+psutil

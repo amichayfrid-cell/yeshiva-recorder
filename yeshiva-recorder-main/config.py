@@ -1,0 +1,74 @@
+import os
+from pathlib import Path
+
+# Base Paths
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+
+INCOMING_DIR = DATA_DIR / "incoming"
+SORTED_DIR = DATA_DIR / "sorted"
+NEEDS_REVIEW_DIR = DATA_DIR / "needs_review"
+HISTORY_FILE = DATA_DIR / "history.json"
+MAX_HISTORY_ENTRIES = 500  # Maximum number of records to retain in history.json
+
+# Speech-to-Text (STT) Configuration - ivrit.ai specialized Hebrew Whisper Large Turbo (Local Offline Model)
+STT_MODEL_NAME = str(BASE_DIR / "ivrit_model")
+STT_DEVICE = "cpu"
+STT_COMPUTE_TYPE = "int8" # Fast CPU quantized inference
+
+# AI Entity Extraction Configuration (LLM)
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL_NAME = "gemma4:e2b"
+AUDIO_CLIP_DURATION_SEC = 35 # 35 seconds is optimal for intro
+AI_TIMEOUT_SEC = 180 # Generous timeout for CPU inference
+
+# Known Yeshiva Rabbis for STT bias and LLM entity normalization
+KNOWN_RABBIS = [
+    "הרב אבי טילמן",
+    "הרב אבינועם גולד",
+    "הרב אביעד טורם",
+    "הרב אודי הראל",
+    "הרב אורי שטרנברג",
+    "הרב אוריאל ספז",
+    "הרב אלחנן אוריאל",
+    "הרב אלי בזק",
+    "הרב אלישיב מאיר",
+    "הרב אמיר כץ",
+    "הרב גיל-עד גנץ",
+    "הרב דידי לנזמן",
+    "הרב דרור שילה",
+    "הרב חזי מעטו",
+    "הרב יואל בן-דרור",
+    "הרב יוסי הורביץ",
+    "הרב יניב קרייף",
+    "הרב יעקב גרוס",
+    "הרב ישי רמות",
+    "הרב מאיר קדוש",
+    "הרב משה מאלי",
+    "הרב נחמיה טאו",
+    "הרב ניר שמשוני",
+    "הרב נעם לנדאו",
+    "הרב ערן היימן",
+    "הרב צבי קוסטינר",
+    "הרב קובי דביר",
+    "הרב שמריהו הופמן",
+    # השמות הקצרים הנפוצים בדיבור:
+    "הרב שמריהו",
+    "הרב ערן",
+    "הרב אמיר",
+    "הרב אורי",
+    "הרב אודי"
+]
+
+# USB Ingestion Configuration
+USB_DELETE_AFTER_INGEST = True  # Automatically wipe recorder after verified copy
+USB_POLL_INTERVAL_SEC = 2.0
+USB_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".wma"}
+
+def ensure_directories():
+    """Ensures that all necessary directories exist."""
+    for directory in [INCOMING_DIR, SORTED_DIR, NEEDS_REVIEW_DIR]:
+        directory.mkdir(parents=True, exist_ok=True)
+
+# Automatically ensure directories on import
+ensure_directories()
