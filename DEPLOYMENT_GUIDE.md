@@ -8,11 +8,11 @@
 
 לפני שמעתיקים את התיקייה בדיסק און קי (DOK) או ברשת:
 
-1. **מה להעתיק:** העתק את תיקיית הפרויקט `yeshiva-recorder-main`.
-2. **ממה להימנע (אין צורך להעתיק):**
+1. **מה להעתיק / לשבט:** שכפל את המאגר באמצעות `git clone` או העתק את תיקיית הפרויקט המלאה.
+2. **ממה להימנע (אין צורך להעתיק ידנית):**
    - תיקיית `venv` (תיבנה מחדש במחשב היעד).
-   - תיקיות `__pycache__` ו-`.git`.
-   - קבצי שמע זמניים מתוך `data/incoming/` או `data/sorted/`.
+   - תיקיות `__pycache__` וקבצי הורדה זמניים.
+   - קבצי שמע מתוך `data/incoming/` או `data/sorted/`.
 
 ---
 
@@ -107,13 +107,25 @@ sudo ./install.sh
      ```
    - ודא שהקובץ הועבר ל-`data/incoming/`, מוין ל-`data/sorted/`, ונמחק מהמקלט (אם מוגדר `USB_DELETE_AFTER_INGEST = True`).
 
+3. **הרצת מבחן 50 השיעורים וניתוח ביצועים (Benchmark):**
+   - לאחר עיבוד קבוצת שיעורים, הרץ את כלי הניתוח:
+     ```bash
+     python analyze_benchmark.py
+     ```
+   - להפקת דוח Markdown מפורט לקובץ:
+     ```bash
+     python analyze_benchmark.py --export benchmark_report.md
+     ```
+
 ---
 
 ## 🛠️ פקודות ניהול ותחזוקה שימושיות
 
 | פעולה | פקודה ב-Ubuntu | פקודה ב-Windows |
 | :--- | :--- | :--- |
+| **משיכת עדכונים מ-GitHub** | `git pull origin main` | `git pull origin main` |
 | **בדיקת סטטוס שירות** | `sudo systemctl status recorder.service` | `tasklist \| findstr python` |
 | **צפייה בלוגים חיים** | `journalctl -u recorder.service -f` | צפייה בחלון ה-CMD |
+| **ניתוח דוח ביצועים ודיוק** | `python analyze_benchmark.py` | `python analyze_benchmark.py` |
 | **איפוס נתונים לבדיקות** | `python reset_data.py` | `python reset_data.py` |
 | **סריקת שאיבה חד-פעמית** | `python test_usb_ingest.py` | `python test_usb_ingest.py` |
