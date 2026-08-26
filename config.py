@@ -26,6 +26,9 @@ WEB_PORT = int(os.getenv("WEB_PORT", "8000"))
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "1234")  # Admin access password
 STATIC_DIR = BASE_DIR / "web" / "static"
 
+# Rav Tzvi Kostiner Protected Audio Library Directory
+RAV_TZVI_DIR = Path(os.getenv("RAV_TZVI_DIR", str(DATA_DIR / "rav_tzvi")))
+
 # Network Share (Windows Server - SMB / CIFS) Configuration
 USE_NETWORK_SHARE = os.getenv("USE_NETWORK_SHARE", "False").lower() in ("true", "1", "yes")
 SMB_SERVER_HOST = os.getenv("SMB_SERVER_HOST", "mdserver")
@@ -83,7 +86,7 @@ USB_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".wma"}
 
 def ensure_directories():
     """Ensures that all necessary directories exist."""
-    for directory in [INCOMING_DIR, SORTED_DIR, NEEDS_REVIEW_DIR, LOCAL_BUFFER_DIR, STATIC_DIR]:
+    for directory in [INCOMING_DIR, SORTED_DIR, NEEDS_REVIEW_DIR, LOCAL_BUFFER_DIR, STATIC_DIR, RAV_TZVI_DIR]:
         directory.mkdir(parents=True, exist_ok=True)
 
 # Automatically ensure directories on import

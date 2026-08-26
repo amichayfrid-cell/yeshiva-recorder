@@ -333,6 +333,172 @@ def sort_file(req: SortFileRequest, authenticated: bool = Depends(require_admin)
     }
 
 # ==========================================
+# Rav Tzvi Protected Library & Streaming API
+# ==========================================
+def get_safe_rav_tzvi_path(subpath: str = "") -> Path:
+    """Resolves and validates a subpath inside RAV_TZVI_DIR preventing path traversal."""
+    base = config.RAV_TZVI_DIR.resolve()
+    base.mkdir(parents=True, exist_ok=True)
+    if not subpath:
+        return base
+    clean_sub = os.path.normpath(subpath).lstrip("/\\")
+    resolved = (base / clean_sub).resolve()
+    if not str(resolved).startswith(str(base)):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    return resolved
+
+@app.get("/api/rav-tzvi/browse")
+def browse_rav_tzvi(subpath: str = Query("", description="Relative folder subpath")):
+    """
+    Browses Rav Tzvi Kostiner's protected library in an Explorer-like structure.
+    Returns breadcrumbs, folders, and playable audio files.
+    """
+    target_dir = get_safe_rav_tzvi_path(subpath)
+    if not target_dir.exists() or not target_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Directory not found")
+
+    base = config.RAV_TZVI_DIR.resolve()
+    rel_path = target_dir.relative_to(base).as_posix()
+    if rel_path == ".":
+        rel_path = ""
+
+    # Build Breadcrumbs
+    breadcrumbs = [{"name": "שיעורי הרב צבי", "subpath": ""}]
+    if rel_path:
+        parts = rel_path.split("/")
+        accumulated = []
+        for part in parts:
+            accumulated.append(part)
+            breadcrumbs.append({
+                "name": part,
+                "subpath": "/".join(accumulated)
+            })
+
+    folders = []
+    files = []
+
+    for item in sorted(target_dir.iterdir(), key=lambda x: x.name):
+        if item.name.startswith("."):
+            continue
+        if item.is_dir():
+            # Count audio items inside
+            audio_count = len([f for f in item.iterdir() if f.is_file() and f.suffix.lower() in {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".wma"}])
+            subfolder_count = len([f for f in item.iterdir() if f.is_dir() and not f.name.startswith(".")])
+            folders.append({
+                "name": item.name,
+                "subpath": item.relative_to(base).as_posix(),
+                "audio_count": audio_count,
+                "subfolder_count": subfolder_count
+            })
+        elif item.is_file() and item.suffix.lower() in {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".wma"}:
+            stat = item.stat()
+            files.append({
+                "filename": item.name,
+                "subpath": item.relative_to(base).as_posix(),
+                "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat()
+            })
+
+    return {
+        "current_subpath": rel_path,
+        "breadcrumbs": breadcrumbs,
+        "folders": folders,
+        "files": files,
+        "total_items": len(folders) + len(files)
+    }
+
+@app.get("/api/rav-tzvi/search")
+def search_rav_tzvi(q: str = Query("", description="Search query across all folders")):
+    """
+    Recursively searches all folders and audio files in Rav Tzvi's library matching query q.
+    """
+    base = config.RAV_TZVI_DIR.resolve()
+    base.mkdir(parents=True, exist_ok=True)
+    query = q.strip().lower()
+    if not query:
+        return {"query": q, "folders": [], "files": [], "total_items": 0}
+
+    folders = []
+    files = []
+
+    for item in base.rglob("*"):
+        if item.name.startswith("."):
+            continue
+        rel_posix = item.relative_to(base).as_posix()
+        if query in item.name.lower():
+            if item.is_dir():
+                try:
+                    audio_count = len([f for f in item.iterdir() if f.is_file() and f.suffix.lower() in {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".wma"}])
+                except Exception:
+                    audio_count = 0
+                folders.append({
+                    "name": item.name,
+                    "subpath": rel_posix,
+                    "folder_path": "/".join(rel_posix.split("/")[:-1]),
+                    "audio_count": audio_count
+                })
+            elif item.is_file() and item.suffix.lower() in {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".wma"}:
+                stat = item.stat()
+                folder_path = "/".join(rel_posix.split("/")[:-1])
+                files.append({
+                    "filename": item.name,
+                    "subpath": rel_posix,
+                    "folder_path": folder_path,
+                    "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                })
+
+        if len(folders) + len(files) >= 150:
+            break
+
+    return {
+        "query": q,
+        "folders": folders,
+        "files": files,
+        "total_items": len(folders) + len(files)
+    }
+
+@app.get("/api/rav-tzvi/stream")
+def stream_rav_tzvi(file: str = Query(..., description="Relative file subpath"), request: Request = None):
+    """
+    Protected streaming of Rav Tzvi shiurim directly from disk with Range Header support.
+    Disallows external downloads and supports responsive web playback.
+    """
+    file_path = get_safe_rav_tzvi_path(file)
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Audio file not found")
+
+    file_size = file_path.stat().st_size
+    mime_type, _ = mimetypes.guess_type(str(file_path))
+    mime_type = mime_type or "audio/mpeg"
+
+    range_header = request.headers.get("range") if request else None
+
+    if not range_header:
+        return FileResponse(path=file_path, media_type=mime_type, filename=file_path.name)
+
+    try:
+        byte_range = range_header.replace("bytes=", "").split("-")
+        start = int(byte_range[0])
+        end = int(byte_range[1]) if byte_range[1] else file_size - 1
+        end = min(end, file_size - 1)
+        length = end - start + 1
+
+        with open(file_path, "rb") as f:
+            f.seek(start)
+            data = f.read(length)
+
+        headers = {
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(length),
+            "Content-Type": mime_type,
+        }
+        return Response(content=data, status_code=206, headers=headers)
+    except Exception:
+        return FileResponse(path=file_path, media_type=mime_type, filename=file_path.name)
+
+# ==========================================
 # Static Files & Pages Routing
 # ==========================================
 config.STATIC_DIR.mkdir(parents=True, exist_ok=True)
@@ -354,7 +520,16 @@ def admin_page():
         return FileResponse(str(admin_html))
     return HTMLResponse("<h1>Admin Dashboard Loading...</h1>")
 
+@app.get("/rav-tzvi")
+def rav_tzvi_page():
+    """Serves the Explorer-like Protected Streamer for Rav Tzvi Kostiner's Shiurim."""
+    rav_tzvi_html = config.STATIC_DIR / "rav_tzvi.html"
+    if rav_tzvi_html.exists():
+        return FileResponse(str(rav_tzvi_html))
+    return HTMLResponse("<h1>Rav Tzvi Library Loading...</h1>")
+
 @app.get("/")
 def root_redirect():
     """Redirects root to /admin."""
     return RedirectResponse(url="/admin")
+
