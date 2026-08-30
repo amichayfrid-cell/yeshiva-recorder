@@ -15,7 +15,23 @@ except ImportError:
 import glob
 import subprocess
 
+def decode_hebrew_filename(filename: str) -> str:
+    """Decodes improperly encoded Hebrew filenames (CP862/Windows-1255 to UTF-8)."""
+    try:
+        raw_bytes = filename.encode('latin1')
+        for encoding in ['cp862', 'windows-1255', 'iso-8859-8']:
+            try:
+                decoded = raw_bytes.decode(encoding)
+                if any('\u0590' <= c <= '\u05ff' for c in decoded):
+                    return decoded
+            except UnicodeDecodeError:
+                pass
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        pass
+    return filename
+
 def auto_mount_linux_usb():
+
     """
     On headless Linux servers (where USB drives aren't auto-mounted by a GUI),
     scans for unmounted USB block devices (/dev/sd[b-z][1-9]) and mounts them to /media/usb_sdX.
@@ -31,10 +47,11 @@ def auto_mount_linux_usb():
             if res.stdout.strip():
                 continue  # Already mounted
 
-            # Try to auto-mount to /media/usb_<partition_name> with full permissions
+            # Try to auto-mount to /media/usb_<partition_name> with full permissions & Hebrew UTF-8 support
             mount_point = Path(f"/media/usb_{Path(dev).name}")
             subprocess.run(["sudo", "mkdir", "-p", str(mount_point)], capture_output=True, text=True)
-            subprocess.run(["sudo", "mount", "-o", "umask=000", dev, str(mount_point)], capture_output=True, text=True)
+            subprocess.run(["sudo", "mount", "-o", "umask=000,iocharset=utf8,codepage=862", dev, str(mount_point)], capture_output=True, text=True)
+
         except Exception:
             pass
 
@@ -72,7 +89,8 @@ def get_removable_mounts() -> List[Path]:
 def copy_and_verify_from_usb(
     source_file: Path,
     target_dir: Path = config.INCOMING_DIR,
-    delete_source: bool = config.USB_DELETE_AFTER_INGEST
+    delete_source: bool = config.USB_DELETE_AFTER_INGEST,
+    target_name: Optional[str] = None
 ) -> Optional[Path]:
     """
     Safely copies an audio file from a USB device into target_dir:
@@ -83,8 +101,10 @@ def copy_and_verify_from_usb(
     if not source_file.exists():
         return None
 
-    unique_target = get_unique_filepath(target_dir, source_file.name)
+    filename = target_name if target_name else source_file.name
+    unique_target = get_unique_filepath(target_dir, filename)
     print(f"[USB Ingest] Copying {source_file.name} -> {unique_target.name}...")
+
 
     try:
         if delete_source:
@@ -140,7 +160,9 @@ def scan_and_ingest_path(
                 # Skip hidden/system files
                 if file.startswith("."):
                     continue
-                res = copy_and_verify_from_usb(file_path, target_dir, delete_source)
+                
+                clean_name = decode_hebrew_filename(file)
+                res = copy_and_verify_from_usb(file_path, target_dir, delete_source, target_name=clean_name)
                 if res:
                     ingested_files.append(res)
 

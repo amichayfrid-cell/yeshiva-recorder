@@ -17,9 +17,10 @@ def get_hebrew_date_str(dt: Optional[datetime] = None) -> str:
         
         # Remove gershayim and apostrophes to make it safe for filenames
         clean_str = raw_str.replace('״', '').replace('׳', '').replace('"', '').replace("'", "")
-        # Replace spaces with underscores
-        clean_str = re.sub(r'\s+', '_', clean_str.strip())
+        # Keep clean single spaces between words
+        clean_str = re.sub(r'\s+', ' ', clean_str.strip())
         return clean_str
     except Exception as e:
         print(f"Warning: Hebrew date conversion failed ({e}), using Gregorian fallback.")
         return dt.strftime("%Y-%m-%d")
+

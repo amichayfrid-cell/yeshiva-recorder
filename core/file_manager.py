@@ -181,3 +181,28 @@ def record_history(
 
     with open(config.HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
+
+    # Generate / Update CSV Report with UTF-8 BOM for crystal-clear Hebrew in Excel
+    report_csv = config.DATA_DIR / "processing_report.csv"
+    try:
+        write_header = not report_csv.exists()
+        with open(report_csv, "a", encoding="utf-8-sig") as f:
+            if write_header:
+                f.write("זמן עיבוד,שם קובץ מקורי,רב שזוהה,נושא שזוהה,סטטוס סיווג,שם קובץ סופי\n")
+            
+            meta = metadata or {}
+            rabbi = meta.get("rabbi") or "לא זוהה"
+            topic = meta.get("topic") or "לא זוהה"
+            status_hebrew = "סווג בהצלחה" if status == "sorted" else "לבדיקה ידנית"
+            final_name = final_filepath.name
+            timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Clean fields for CSV
+            def clean_csv(text):
+                return '"' + str(text).replace('"', '""') + '"'
+                
+            line = f"{clean_csv(timestamp_str)},{clean_csv(original_filename)},{clean_csv(rabbi)},{clean_csv(topic)},{clean_csv(status_hebrew)},{clean_csv(final_name)}\n"
+            f.write(line)
+    except Exception as e:
+        print(f"[Report] Warning: Could not update CSV report: {e}")
+
