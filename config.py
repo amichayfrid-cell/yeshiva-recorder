@@ -12,7 +12,7 @@ HISTORY_FILE = DATA_DIR / "history.json"
 MAX_HISTORY_ENTRIES = 500  # Maximum number of records to retain in history.json
 
 # Speech-to-Text (STT) Configuration - ivrit.ai specialized Hebrew Whisper Large Turbo (Local Offline Model)
-STT_MODEL_NAME = str(BASE_DIR / "ivrit_model")
+STT_MODEL_NAME = "ivrit-ai/whisper-large-v3-turbo-ct2"
 STT_DEVICE = "cpu"
 STT_COMPUTE_TYPE = "int8" # Fast CPU quantized inference
 
@@ -30,8 +30,9 @@ RABBIS_LIST = [
 
 # AI Entity Extraction Configuration (LLM)
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "gemma4:e2b"
-AUDIO_CLIP_DURATION_SEC = 35 # 35 seconds is optimal for intro
+MODEL_NAME = "aminadaven/dictalm2.0-instruct"
+VAD_MIN_SILENCE_MS = 500 # VAD threshold to cut audio after intro
+AUDIO_CLIP_MAX_DURATION_SEC = 60 # Maximum seconds to scan for intro
 AI_TIMEOUT_SEC = 180 # Generous timeout for CPU inference
 
 # Known Yeshiva Rabbis for STT bias and LLM entity normalization

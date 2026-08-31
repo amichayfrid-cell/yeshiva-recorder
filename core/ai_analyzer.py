@@ -220,29 +220,28 @@ def extract_metadata_from_text(transcript: str) -> Dict[str, Any]:
         "דוגמאות:\n"
         "---\n"
         "קלט: \"הרב ערן, חבורה באורות התחייה, יום שני, ד' אלול, פרק כז'.\"\n"
-        "פלט: {\"rabbi\": \"הרב ערן היימן\", \"topic\": \"אורות התחייה פרק כז\", \"status\": \"identified\"}\n"
+        "פלט: {\"rabbi_name\": \"הרב ערן היימן\", \"lesson_topic\": \"אורות התחייה פרק כז\"}\n"
         "---\n"
         "קלט: \"ג' אלול, הרב דרור עורות התשובה, פרק יוד אלף פסקה א'. טוב, אז אנחנו נתחיל...\"\n"
-        "פלט: {\"rabbi\": \"הרב דרור שילה\", \"topic\": \"אורות התשובה פרק יא פסקה א\", \"status\": \"identified\"}\n"
+        "פלט: {\"rabbi_name\": \"הרב דרור שילה\", \"lesson_topic\": \"אורות התשובה פרק יא פסקה א\"}\n"
         "---\n"
         "קלט: \"הרב יוסי, עיון, בבא מציעא, פרק השואל, דף צדיג עמוד ב', שמירה כדנתרי אינשי, ה' אלול. אתה אומר את המשנה...\"\n"
-        "פלט: {\"rabbi\": \"הרב יוסי הורביץ\", \"topic\": \"עיון בבא מציעא פרק השואל דף צג עמוד ב שמירה כדנתרי אינשי\", \"status\": \"identified\"}\n"
+        "פלט: {\"rabbi_name\": \"הרב יוסי הורביץ\", \"lesson_topic\": \"עיון בבא מציעא פרק השואל דף צג עמוד ב שמירה כדנתרי אינשי\"}\n"
         "---\n"
         "קלט: \"יא אלול, הרב אבי טילמן, שיעור בתפארת ישראל, שיעור שני.\"\n"
-        "פלט: {\"rabbi\": \"הרב אבי טילמן\", \"topic\": \"תפארת ישראל שיעור שני\", \"status\": \"identified\"}\n"
+        "פלט: {\"rabbi_name\": \"הרב אבי טילמן\", \"lesson_topic\": \"תפארת ישראל שיעור שני\"}\n"
         "---\n"
         "קלט: \"הרב קובי, אורות התשובה, פרק יז. אז ראינו אתמול...\"\n"
-        "פלט: {\"rabbi\": \"הרב קובי דביר\", \"topic\": \"אורות התשובה פרק יז\", \"status\": \"identified\"}\n"
+        "פלט: {\"rabbi_name\": \"הרב קובי דביר\", \"lesson_topic\": \"אורות התשובה פרק יז\"}\n"
         "---\n"
         "קלט: \"אוקיי, צריך קליאת הזהירות. הנה האמצעים אשר נקנה בם בזריזות...\"\n"
-        "פלט: {\"rabbi\": null, \"topic\": null, \"status\": \"unidentified\"}\n"
+        "פלט: {\"rabbi_name\": null, \"lesson_topic\": null}\n"
         "---\n\n"
         f"התמלול לעיבוד:\n\"\"\"\n{focused_transcript}\n\"\"\"\n\n"
         "חובה להחזיר אך ורק אובייקט JSON תקין (ללא שום טקסט נוסף) במבנה הבא:\n"
         "{\n"
-        "  \"rabbi\": \"שם הרב המלא מתוך הרשימה בלבד\" | null,\n"
-        "  \"topic\": \"נושא השיעור\" | null,\n"
-        "  \"status\": \"identified\" | \"unidentified\"\n"
+        "  \"rabbi_name\": \"שם הרב המלא מתוך הרשימה בלבד\" | null,\n"
+        "  \"lesson_topic\": \"נושא השיעור\" | null\n"
         "}"
     )
 
@@ -250,10 +249,23 @@ def extract_metadata_from_text(transcript: str) -> Dict[str, Any]:
         "model": config.MODEL_NAME,
         "prompt": prompt,
         "stream": False,
-        "format": "json",
+        "format": {
+            "type": "object",
+            "properties": {
+                "rabbi_name": {
+                    "type": ["string", "null"],
+                    "description": "שמו המלא של הרב כפי שחולץ מהטקסט."
+                },
+                "lesson_topic": {
+                    "type": ["string", "null"],
+                    "description": "הנושא המרכזי של השיעור כפי שהוכרז בטקסט."
+                }
+            },
+            "required": ["rabbi_name", "lesson_topic"],
+            "additionalProperties": False
+        },
         "options": {
-            "num_predict": 120,
-            "temperature": 0.1
+            "temperature": 0.0
         }
     }
 
@@ -272,8 +284,8 @@ def extract_metadata_from_text(transcript: str) -> Dict[str, Any]:
 
         # Parse JSON
         parsed = json.loads(response_text)
-        raw_rabbi = parsed.get("rabbi")
-        raw_topic = parsed.get("topic")
+        raw_rabbi = parsed.get("rabbi_name")
+        raw_topic = parsed.get("lesson_topic")
 
         # Post-process and normalize strictly
         rabbi = normalize_rabbi_name(raw_rabbi)
