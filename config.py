@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 # Base Paths
@@ -10,68 +9,6 @@ SORTED_DIR = DATA_DIR / "sorted"
 NEEDS_REVIEW_DIR = DATA_DIR / "needs_review"
 HISTORY_FILE = DATA_DIR / "history.json"
 MAX_HISTORY_ENTRIES = 500  # Maximum number of records to retain in history.json
-
-# Speech-to-Text (STT) Configuration - ivrit.ai specialized Hebrew Whisper Large Turbo (Local Offline Model)
-STT_MODEL_NAME = "ivrit-ai/whisper-large-v3-turbo-ct2"
-STT_DEVICE = "cpu"
-STT_COMPUTE_TYPE = "int8" # Fast CPU quantized inference
-
-# List of known yeshiva rabbis for AI matching hint
-RABBIS_LIST = [
-    "הרב אבי טילמן", "הרב אבינועם גולד", "הרב אביעד טורם", "הרב אודי הראל",
-    "הרב אורי שטרנברג", "הרב אוריאל ספז", "הרב אלחנן אוריאל", "הרב אלי בזק",
-    "הרב אלישיב מאיר", "הרב אמיר כץ", "הרב גיל-עד גנץ", "הרב דידי לנזמן",
-    "הרב דרור שילה", "הרב חזי מעטו", "הרב יואל בן-דרור", "הרב יוסי הורביץ",
-    "הרב יניב קרייף", "הרב יעקב גרוס", "הרב ישי רמות", "הרב מאיר קדוש",
-    "הרב משה מאלי", "הרב נחמיה טאו", "הרב ניר שמשוני", "הרב נעם לנדאו",
-    "הרב ערן היימן", "הרב צבי קוסטינר", "הרב קובי דביר", "הרב שמריהו הופמן",
-    "ר' נהוראי שבתאי", "ר' שילה וואהל"
-]
-
-# AI Entity Extraction Configuration (LLM)
-OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "aminadaven/dictalm2.0-instruct"
-VAD_MIN_SILENCE_MS = 500 # VAD threshold to cut audio after intro
-AUDIO_CLIP_MAX_DURATION_SEC = 60 # Maximum seconds to scan for intro
-AI_TIMEOUT_SEC = 180 # Generous timeout for CPU inference
-
-# Known Yeshiva Rabbis for STT bias and LLM entity normalization
-KNOWN_RABBIS = [
-    "הרב אבי טילמן",
-    "הרב אבינועם גולד",
-    "הרב אביעד טורם",
-    "הרב אודי הראל",
-    "הרב אורי שטרנברג",
-    "הרב אוריאל ספז",
-    "הרב אלחנן אוריאל",
-    "הרב אלי בזק",
-    "הרב אלישיב מאיר",
-    "הרב אמיר כץ",
-    "הרב גיל-עד גנץ",
-    "הרב דידי לנזמן",
-    "הרב דרור שילה",
-    "הרב חזי מעטו",
-    "הרב יואל בן-דרור",
-    "הרב יוסי הורביץ",
-    "הרב יניב קרייף",
-    "הרב יעקב גרוס",
-    "הרב ישי רמות",
-    "הרב מאיר קדוש",
-    "הרב משה מאלי",
-    "הרב נחמיה טאו",
-    "הרב ניר שמשוני",
-    "הרב נעם לנדאו",
-    "הרב ערן היימן",
-    "הרב צבי קוסטינר",
-    "הרב קובי דביר",
-    "הרב שמריהו הופמן",
-    # השמות הקצרים הנפוצים בדיבור:
-    "הרב שמריהו",
-    "הרב ערן",
-    "הרב אמיר",
-    "הרב אורי",
-    "הרב אודי"
-]
 
 # USB Ingestion Configuration
 USB_DELETE_AFTER_INGEST = True  # Automatically wipe recorder after verified copy
