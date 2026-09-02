@@ -43,21 +43,43 @@ def get_file_timestamp(filepath: Path) -> datetime:
 def generate_timestamp_filename(file_dt: datetime, original_extension: str = ".mp3") -> str:
     """
     Generates a standardized filename based on timestamp and Hebrew date.
-    Format: 'YYYY-MM-DD_HH-MM-SS_(תאריך עברי).ext'
+    Format: 'YYYY-MM-DD_HH-MM-SS_(תאריך_עברי).ext'
     Example: '2026-09-02_14-30-00_(י_אלול_תשפו).mp3'
     """
     date_time_str = file_dt.strftime("%Y-%m-%d_%H-%M-%S")
     hebrew_date = get_hebrew_date_str(file_dt).replace(" ", "_")
     return f"{date_time_str}_({hebrew_date}){original_extension}"
 
+def sync_local_staging_to_network() -> None:
+    """
+    If central network share is online, flushes any local staging files to the network share.
+    """
+    if not config.NETWORK_TARGET_DIR.exists():
+        return
+
+    staging_dir = config.LOCAL_STAGING_DIR
+    if not staging_dir.exists():
+        return
+
+    for file_path in staging_dir.iterdir():
+        if file_path.is_file() and file_path.suffix.lower() in SUPPORTED_EXTENSIONS:
+            try:
+                unique_dest = get_unique_filepath(config.NETWORK_TARGET_DIR, file_path.name)
+                print(f"[Sync] Network online! Syncing {file_path.name} to central server...")
+                safe_move(str(file_path), unique_dest)
+                print(f"[Sync] ✓ Verified & transferred to central server: {unique_dest.name}")
+            except Exception as e:
+                print(f"[Sync] Error syncing {file_path.name} to network: {e}")
+
 def process_single_audio_file(filepath: Path) -> Path:
     """
-    Executes a fast, lightweight ingestion pipeline on a single audio file:
-    1. Extracts original recording timestamp.
+    Executes a verified, double-step pipeline on a single audio file:
+    1. Extracts original recording timestamp and Hebrew date.
     2. Generates date-time based filename.
-    3. Moves file directly to sorting queue (needs_review).
-    4. Applies basic ID3 tags.
-    5. Logs to history.
+    3. Resolves target: Network Share (\\mdserver\שיעורי שמע\שיעורים למיון) or Local Staging.
+    4. Safely moves with SHA-256 integrity verification.
+    5. Deletes local copy only upon 100% verified match in target.
+    6. Logs to history.
     """
     start_time = time.time()
     original_name = filepath.name
@@ -66,56 +88,63 @@ def process_single_audio_file(filepath: Path) -> Path:
     hebrew_date_str = get_hebrew_date_str(file_dt)
 
     print(f"\n" + "=" * 60)
-    print(f"[Ingestion] Processing file: {original_name}")
-    print(f"[Ingestion] Original recording time: {file_dt.strftime('%Y-%m-%d %H:%M:%S')} ({hebrew_date_str})")
+    print(f"[Pipeline] Processing file: {original_name}")
+    print(f"[Pipeline] Original recording time: {file_dt.strftime('%Y-%m-%d %H:%M:%S')} ({hebrew_date_str})")
 
     # Generate timestamp filename
     target_filename = generate_timestamp_filename(file_dt, original_extension=ext)
-    target_dir = config.NEEDS_REVIEW_DIR
+    target_dir = config.get_final_target_dir()
     unique_target_path = get_unique_filepath(target_dir, target_filename)
 
-    print(f"[Ingestion] Moving to sorting queue: {unique_target_path.name}")
-    final_path = safe_move(str(filepath), unique_target_path)
+    is_network = (target_dir == config.NETWORK_TARGET_DIR)
+    target_label = "🏢 Central File Server (mdserver)" if is_network else "💾 Local Staging Buffer"
+    print(f"[Pipeline] Destination: {target_label} -> {unique_target_path.name}")
 
-    # Basic metadata for tagging & history
+    # Embed initial ID3 tags before move
     metadata = {
         "rabbi": None,
         "topic": None,
-        "status": "pending_manual_review",
+        "status": "needs_review",
         "recorded_at": file_dt.isoformat()
     }
-
-    # Embed initial ID3 tags (Album = Hebrew Date, Title = Target Filename)
     try:
         apply_id3_tags(
-            filepath=final_path,
+            filepath=filepath,
             metadata=metadata,
             hebrew_date_str=hebrew_date_str
         )
     except Exception as e:
-        print(f"[Ingestion] Warning: ID3 tagging skipped: {e}")
+        print(f"[Pipeline] ID3 tagging skipped: {e}")
+
+    # Verified safe move (SHA-256 match before local delete)
+    final_path = safe_move(str(filepath), unique_target_path)
 
     # Record history
     duration_sec = round(time.time() - start_time, 2)
     record_history(
         original_filename=original_name,
         final_filepath=final_path,
-        status="needs_review",
+        status="synced_to_network" if is_network else "in_local_staging",
         metadata={
             **metadata,
-            "duration_sec": duration_sec
+            "duration_sec": duration_sec,
+            "destination": str(final_path)
         }
     )
 
-    print(f"[Ingestion] ✓ Ready for manual sorting: {final_path.name} ({duration_sec}s)")
+    print(f"[Pipeline] ✓ 100% Verified & Moved to {target_label}: {final_path.name} ({duration_sec}s)")
     print("=" * 60)
     return final_path
 
 def process_inbox() -> List[Path]:
     """
     Scans incoming/ once and processes all available audio files.
-    Returns list of processed paths.
+    Also syncs any offline staging files to the network share.
     """
+    # 1. Sync any local buffer files if network is available
+    sync_local_staging_to_network()
+
+    # 2. Process incoming files
     processed_files = []
     if not config.INCOMING_DIR.exists():
         return processed_files
@@ -129,12 +158,13 @@ def process_inbox() -> List[Path]:
 
 def start_watching(poll_interval: float = 2.0) -> None:
     """
-    Continuous background daemon loop monitoring incoming/.
+    Continuous background daemon loop monitoring incoming/ and syncing to network.
     """
     print("=" * 60)
-    print(f"[*] Lightweight Ingestion Watcher is ACTIVE")
+    print(f"[*] Double-Verification Ingestion Watcher is ACTIVE")
     print(f"[*] Monitoring directory: {config.INCOMING_DIR}")
-    print(f"[*] Target Sorting directory: {config.NEEDS_REVIEW_DIR}")
+    print(f"[*] Central Network Target: {config.NETWORK_TARGET_DIR}")
+    print(f"[*] Local Staging Buffer: {config.LOCAL_STAGING_DIR}")
     print(f"[*] Poll interval: {poll_interval}s. Press Ctrl+C to stop.")
     print("=" * 60)
 
