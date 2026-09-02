@@ -66,8 +66,8 @@ def update_note_status(note_id: int, status: str) -> bool:
 
 def get_notes_for_file(filename: str) -> List[Dict[str, Any]]:
     """Returns open notes matching a specific filename."""
-    base = os.path.basename(filename)
-    return [n for n in get_notes_data() if n.get("filename") == base and n.get("status") == "open"]
+    base = os.path.basename(filename.replace('\\', '/'))
+    return [n for n in get_notes_data() if os.path.basename(n.get("filename", "").replace('\\', '/')) == base and n.get("status") == "open"]
 
 def list_direct_subfolders(target_path: Optional[str] = None) -> Dict[str, Any]:
     """
