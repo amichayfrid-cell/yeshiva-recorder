@@ -475,6 +475,27 @@ async function loadNotes() {
     }
 }
 
+function getNoteTimeGroup(dateStr) {
+    if (!dateStr) return "לא ידוע";
+    const noteDate = new Date(dateStr.replace(" ", "T"));
+    const today = new Date();
+    today.setHours(0,0,0,0);
+    
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    
+    const lastWeek = new Date(today);
+    lastWeek.setDate(lastWeek.getDate() - 7);
+    
+    const noteDay = new Date(noteDate);
+    noteDay.setHours(0,0,0,0);
+
+    if (noteDay.getTime() === today.getTime()) return "היום";
+    if (noteDay.getTime() === yesterday.getTime()) return "אתמול";
+    if (noteDay.getTime() > lastWeek.getTime()) return "השבוע";
+    return "מוקדם יותר";
+}
+
 function renderAllNotes() {
     const list = document.getElementById("notes-list");
     if (allNotes.length === 0) {
@@ -482,24 +503,40 @@ function renderAllNotes() {
         return;
     }
 
-    list.innerHTML = allNotes.map(note => `
-        <div class="lesson-card">
-            <div class="card-header">
-                <div>
-                    <span class="badge ${note.status === 'open' ? 'badge-alert' : 'badge-hebrew-date'}">${note.status === 'open' ? 'פתוחה' : 'טופלה'}</span>
-                    <strong style="margin-right: 0.5rem;">${escapeHtml(note.filename)}</strong>
+    const groups = { "היום": [], "אתמול": [], "השבוע": [], "מוקדם יותר": [], "לא ידוע": [] };
+    
+    allNotes.forEach(note => {
+        const group = getNoteTimeGroup(note.created_at);
+        groups[group].push(note);
+    });
+
+    let html = "";
+    for (const [groupName, notes] of Object.entries(groups)) {
+        if (notes.length === 0) continue;
+        
+        html += `<div style="font-weight: 600; color: #475569; margin: 1.5rem 0 0.5rem 0; padding-bottom: 0.3rem; border-bottom: 1px solid #e2e8f0; font-size: 1.1rem;">${groupName}</div>`;
+        
+        html += notes.map(note => `
+            <div class="lesson-card" style="${note.status === 'resolved' ? 'opacity: 0.65; background-color: #f8fafc;' : ''}">
+                <div class="card-header">
+                    <div>
+                        <span class="badge ${note.status === 'open' ? 'badge-alert' : 'badge-hebrew-date'}">${note.status === 'open' ? 'פתוחה' : 'טופלה'}</span>
+                        <strong style="margin-right: 0.5rem;">${escapeHtml(note.filename)}</strong>
+                    </div>
+                    <span style="font-size: 0.8rem; color: var(--text-muted);">${note.created_at}</span>
                 </div>
-                <span style="font-size: 0.8rem; color: var(--text-muted);">${note.created_at}</span>
+                <div style="margin: 0.75rem 0;">
+                    <p><strong>פירוט:</strong> ${escapeHtml(note.description)}</p>
+                    <p style="font-size: 0.85rem; color: var(--text-muted);"><strong>נשלח ע"י:</strong> ${escapeHtml(note.student_name)}</p>
+                </div>
+                ${note.status === 'open' ? `
+                    <button class="btn btn-outline" onclick="resolveNote(${note.id})">✓ סמן כטופל</button>
+                ` : ''}
             </div>
-            <div style="margin: 0.75rem 0;">
-                <p><strong>פירוט:</strong> ${escapeHtml(note.description)}</p>
-                <p style="font-size: 0.85rem; color: var(--text-muted);"><strong>נשלח ע"י:</strong> ${escapeHtml(note.student_name)}</p>
-            </div>
-            ${note.status === 'open' ? `
-                <button class="btn btn-outline" onclick="resolveNote(${note.id})">✓ סמן כטופל</button>
-            ` : ''}
-        </div>
-    `).join("");
+        `).join("");
+    }
+
+    list.innerHTML = html;
 }
 
 async function resolveNote(noteId) {
