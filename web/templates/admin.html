@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>לוח בקרה לאחראי שמע - ישיבת מצפה רמון</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <span style="font-size: 1.5rem;">🎙️</span>
+            <h1>מערכת מיון שיעורי תורה</h1>
+        </div>
+        <div class="nav-actions">
+            <div class="nav-tabs">
+                <button class="nav-tab active" id="tab-pending-btn" onclick="switchTab('pending')">
+                    📁 שיעורים למיון (<span id="pending-count">0</span>)
+                </button>
+                <button class="nav-tab" id="tab-notes-btn" onclick="switchTab('notes')">
+                    🔔 הערות תלמידים (<span id="notes-count">0</span>)
+                </button>
+            </div>
+            <button class="btn btn-outline" onclick="loadPendingLessons()">🔄 רענן</button>
+            <a href="/logout" class="btn btn-outline">יציאה</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- View 1: Pending Sorting Queue -->
+        <div id="view-pending">
+            <div class="header-banner">
+                <div>
+                    <h2>שיעורים הממתינים למיון וסיווג</h2>
+                    <p>השמע את הפתיח, הזן את פרטי השיעור, ובחר את תיקיית היעד להעברה מאובטחת.</p>
+                </div>
+            </div>
+
+            <div id="lessons-list" class="lessons-grid">
+                <!-- Dynamically populated via app.js -->
+                <div class="empty-state">
+                    <div class="icon">⏳</div>
+                    <h3>טוען שיעורים...</h3>
+                </div>
+            </div>
+        </div>
+
+        <!-- View 2: All Notes -->
+        <div id="view-notes" style="display: none;">
+            <div class="header-banner">
+                <div>
+                    <h2>הערות תלמידים על שיעורים</h2>
+                    <p>מרכז הערות שהתקבלו מתלמידים דרך התפריט הימני ("הערה לאחראי").</p>
+                </div>
+            </div>
+
+            <div id="notes-list" class="lessons-grid">
+                <!-- Dynamically populated via app.js -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Folder Explorer -->
+    <div id="folder-modal" class="modal-overlay">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h3>סייר תיקיות שרת הישיבה</h3>
+                <button class="btn-icon" onclick="closeFolderModal()">✕</button>
+            </div>
+            
+            <!-- Breadcrumbs Navigation Bar -->
+            <div id="modal-breadcrumbs" class="breadcrumbs-bar">
+                <!-- e.g. ראשי ❯ אלול התשפ''ו ❯ רבני הישיבה -->
+            </div>
+
+            <div class="modal-body">
+                <div id="modal-folders-list" class="folders-column-list">
+                    <!-- Clean list of subfolders in current directory -->
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <div style="display: flex; gap: 0.5rem; flex: 1; margin-left: 1rem;">
+                    <input type="text" id="new-folder-input" class="input-text" placeholder="שם תיקייה חדשה כאן..." style="flex: 1;">
+                    <button class="btn btn-outline" onclick="createNewFolderInCurrentDir()">➕ צור תיקייה</button>
+                </div>
+                <button class="btn btn-primary" onclick="confirmCurrentFolderSelection()">
+                    ✓ בחר בתיקייה זו
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

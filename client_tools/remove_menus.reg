@@ -1,0 +1,21 @@
+Windows Registry Editor Version 5.00
+
+; מחיקת התפריטים מ-HKEY_CLASSES_ROOT (הישנים שדורשים הרשאת מנהל)
+[-HKEY_CLASSES_ROOT\SystemFileAssociations\audio\shell\YeshivaAudioFeedback]
+[-HKEY_CLASSES_ROOT\mp3file\shell\YeshivaAudioFeedback]
+[-HKEY_CLASSES_ROOT\WMP11.AssocFile.MP3\shell\YeshivaAudioFeedback]
+[-HKEY_CLASSES_ROOT\.mp3\shell\YeshivaAudioFeedback]
+[-HKEY_CLASSES_ROOT\SystemFileAssociations\audio\shell\YeshivaFeedback]
+[-HKEY_CLASSES_ROOT\mp3file\shell\YeshivaFeedback]
+[-HKEY_CLASSES_ROOT\WMP11.AssocFile.MP3\shell\YeshivaFeedback]
+[-HKEY_CLASSES_ROOT\.mp3\shell\YeshivaFeedback]
+
+; מחיקת התפריטים מ-HKEY_CURRENT_USER (החדשים שעשינו)
+[-HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\audio\shell\YeshivaAudioFeedback]
+[-HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\.mp3\shell\YeshivaAudioFeedback]
+[-HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\.wav\shell\YeshivaAudioFeedback]
+[-HKEY_CURRENT_USER\Software\Classes\mp3file\shell\YeshivaAudioFeedback]
+[-HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\audio\shell\YeshivaFeedback]
+[-HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\.mp3\shell\YeshivaFeedback]
+[-HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\.wav\shell\YeshivaFeedback]
+[-HKEY_CURRENT_USER\Software\Classes\mp3file\shell\YeshivaFeedback]

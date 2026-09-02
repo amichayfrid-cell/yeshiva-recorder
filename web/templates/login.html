@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>כניסת אחראי שמע - ישיבת מצפה רמון</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="login-body">
+    <div class="login-card">
+        <div class="login-header">
+            <div class="login-icon">🎙️</div>
+            <h1>מערכת מיון שיעורים</h1>
+            <p>לוח בקרה לאחראי שמע</p>
+        </div>
+
+        {% if error %}
+        <div class="alert alert-danger">
+            סיסמה שגויה, אנא נסה שוב.
+        </div>
+        {% endif %}
+
+        <form action="/login" method="POST" class="login-form">
+            <div class="form-group">
+                <label for="password">סיסמת כניסה:</label>
+                <input type="password" id="password" name="password" required autofocus placeholder="הזן סיסמה...">
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">כניסה למערכת</button>
+        </form>
+    </div>
+</body>
+</html>

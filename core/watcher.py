@@ -42,13 +42,13 @@ def get_file_timestamp(filepath: Path) -> datetime:
 
 def generate_timestamp_filename(file_dt: datetime, original_extension: str = ".mp3") -> str:
     """
-    Generates a standardized filename based on timestamp and Hebrew date.
-    Format: 'YYYY-MM-DD_HH-MM-SS_(תאריך_עברי).ext'
-    Example: '2026-09-02_14-30-00_(י_אלול_תשפו).mp3'
+    Generates filename strictly in Hebrew date + time format without Gregorian date.
+    Format: '(תאריך עברי) HH-MM.ext'
+    Example: '(ח חשוון תשפו) 08-45.mp3'
     """
-    date_time_str = file_dt.strftime("%Y-%m-%d_%H-%M-%S")
-    hebrew_date = get_hebrew_date_str(file_dt).replace(" ", "_")
-    return f"{date_time_str}_({hebrew_date}){original_extension}"
+    time_str = file_dt.strftime("%H-%M")
+    hebrew_date = get_hebrew_date_str(file_dt)
+    return f"({hebrew_date}) {time_str}{original_extension}"
 
 def sync_local_staging_to_network() -> None:
     """
@@ -75,7 +75,7 @@ def process_single_audio_file(filepath: Path) -> Path:
     """
     Executes a verified, double-step pipeline on a single audio file:
     1. Extracts original recording timestamp and Hebrew date.
-    2. Generates date-time based filename.
+    2. Generates filename in format: '(תאריך עברי) שעה-דקה.mp3'.
     3. Resolves target: Network Share (\\mdserver\שיעורי שמע\שיעורים למיון) or Local Staging.
     4. Safely moves with SHA-256 integrity verification.
     5. Deletes local copy only upon 100% verified match in target.
@@ -89,9 +89,9 @@ def process_single_audio_file(filepath: Path) -> Path:
 
     print(f"\n" + "=" * 60)
     print(f"[Pipeline] Processing file: {original_name}")
-    print(f"[Pipeline] Original recording time: {file_dt.strftime('%Y-%m-%d %H:%M:%S')} ({hebrew_date_str})")
+    print(f"[Pipeline] Original recording time: {file_dt.strftime('%H:%M')} ({hebrew_date_str})")
 
-    # Generate timestamp filename
+    # Generate filename: '(תאריך עברי) HH-MM.mp3'
     target_filename = generate_timestamp_filename(file_dt, original_extension=ext)
     target_dir = config.get_final_target_dir()
     unique_target_path = get_unique_filepath(target_dir, target_filename)

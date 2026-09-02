@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>השארת הערה לאחראי שמע - ישיבת מצפה רמון</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="login-body">
+    <div class="login-card" style="max-width: 520px;">
+        <div class="login-header">
+            <div class="login-icon">📝</div>
+            <h1>הערה לאחראי שמע</h1>
+            <p>מצאת תקלה בשם השיעור, מיקומו או איכות השמע? עדכן אותנו כאן.</p>
+        </div>
+
+        <div id="alert-box" style="display: none;"></div>
+
+        <form id="feedback-form" onsubmit="submitNote(event)">
+            <input type="hidden" id="original-path" value="{{ original_file }}">
+
+            <div class="form-group">
+                <label>שם הקובץ:</label>
+                <input type="text" id="filename" value="{{ filename }}" readonly style="background: #f1f5f9; font-weight: 500;">
+            </div>
+
+
+            <div class="form-group">
+                <label>פירוט התיקון הנדרש:</label>
+                <textarea id="description" rows="3" required placeholder="למשל: השיעור הוא של הרב דרור על אורות התשובה פרק יא, ולא הרב אורי..."></textarea>
+            </div>
+
+            <div class="form-group">
+                <label>שם השולח (אופציונלי):</label>
+                <input type="text" id="student-name" placeholder="שמך (כדי שנוכל לחזור אליך במידת הצורך)">
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-block" id="submit-btn">
+                📩 שלח הערה לאחראי
+            </button>
+        </form>
+    </div>
+
+    <script>
+        async function submitNote(e) {
+            e.preventDefault();
+            const btn = document.getElementById("submit-btn");
+            const alertBox = document.getElementById("alert-box");
+
+            btn.disabled = true;
+            btn.innerText = "שולח...";
+
+            try {
+                const form = new FormData();
+                form.append("filename", document.getElementById("filename").value);
+                form.append("original_path", document.getElementById("original-path").value);
+                form.append("description", document.getElementById("description").value);
+                form.append("student_name", document.getElementById("student-name").value);
+
+                const res = await fetch("/api/student/notes", { method: "POST", body: form });
+                const data = await res.json();
+
+                if (data.status === "success") {
+                    document.getElementById("feedback-form").style.display = "none";
+                    alertBox.className = "alert alert-success";
+                    alertBox.style.display = "block";
+                    alertBox.innerHTML = `
+                        <h4>תודה רבה! ההערה נשלחה בהצלחה.</h4>
+                        <p>האחראי יראה את ההערה שלך ויעדכן את השיעור בהקדם.</p>
+                        <button class="btn btn-outline btn-block" style="margin-top: 1rem;" onclick="window.close()">סגור חלון</button>
+                    `;
+                } else {
+                    throw new Error("שגיאה בשליחה");
+                }
+            } catch (err) {
+                alertBox.className = "alert alert-danger";
+                alertBox.style.display = "block";
+                alertBox.innerText = "שגיאה בשליחת ההערה, אנא נסה שוב.";
+                btn.disabled = false;
+                btn.innerText = "📩 שלח הערה לאחראי";
+            }
+        }
+    </script>
+</body>
+</html>

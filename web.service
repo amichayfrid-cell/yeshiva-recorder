@@ -1,0 +1,16 @@
+[Unit]
+Description=Yeshiva Audio Recorder Web Management Dashboard
+After=network.target network-online.target
+
+[Service]
+Type=simple
+User=lessons
+WorkingDirectory=/home/lessons/yeshiva-recorder
+ExecStart=/home/lessons/yeshiva-recorder/venv/bin/uvicorn web.server:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=ADMIN_PASSWORD=1234
+
+[Install]
+WantedBy=multi-user.target
