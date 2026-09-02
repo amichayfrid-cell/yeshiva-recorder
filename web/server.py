@@ -214,7 +214,7 @@ def classify_lesson(
     request: Request,
     filename: str = Form(...),
     rabbi_name: str = Form(...),
-    lesson_topic: str = Form(...),
+    lesson_topic: Optional[str] = Form(""),
     hebrew_date: str = Form(...),
     destination_folder: str = Form(...)
 ):

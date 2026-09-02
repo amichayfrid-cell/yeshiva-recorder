@@ -93,7 +93,7 @@ function renderPendingLessons() {
                         <input type="range" class="seek-bar" id="seek-${index}" value="0" min="0" step="0.1" onchange="seekAudio('${index}')">
                         <span class="time-display" id="time-${index}">00:00 / --:--</span>
                     </div>
-                    <audio id="audio-${index}" src="/api/audio/stream?filename=${encodeURIComponent(lesson.filename)}" preload="metadata" ontimeupdate="updateProgress('${index}')" onloadedmetadata="initAudioDuration('${index}')" onended="onAudioEnded('${index}')"></audio>
+                    <audio id="audio-${index}" src="/api/audio/stream?filename=${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}" preload="metadata" ontimeupdate="updateProgress('${index}')" onloadedmetadata="initAudioDuration('${index}')" onended="onAudioEnded('${index}')"></audio>
                 </div>
 
                 <!-- Classification Form Grid -->
@@ -120,7 +120,7 @@ function renderPendingLessons() {
                             <input type="hidden" id="dest-path-${index}">
                         </div>
                     </div>
-                    <button class="btn btn-success" onclick="classifyLesson('${index}', '${encodeURIComponent(lesson.filename)}')">
+                    <button class="btn btn-success" onclick="classifyLesson('${index}', '${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}')">
                         💾 שמור וסווג
                     </button>
                 </div>
@@ -467,7 +467,8 @@ async function loadNotes() {
         const res = await fetch("/api/notes/all");
         const data = await res.json();
         allNotes = data.notes || [];
-        document.getElementById("notes-count").innerText = allNotes.length;
+        const openNotes = allNotes.filter(n => n.status === "open");
+        document.getElementById("notes-count").innerText = openNotes.length;
         renderAllNotes();
     } catch (e) {
         console.error("Error loading notes:", e);
