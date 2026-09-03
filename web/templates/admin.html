@@ -11,7 +11,7 @@
     <nav class="navbar">
         <div class="nav-brand">
             <span style="font-size: 1.5rem;">🎙️</span>
-            <h1>מערכת מיון שיעורי תורה</h1>
+            <h1>מערכת מיון שיעורי הישיבה</h1>
         </div>
         <div class="nav-actions">
             <div class="nav-tabs">
@@ -33,7 +33,6 @@
             <div class="header-banner">
                 <div>
                     <h2>שיעורים הממתינים למיון וסיווג</h2>
-                    <p>השמע את הפתיח, הזן את פרטי השיעור, ובחר את תיקיית היעד להעברה מאובטחת.</p>
                 </div>
             </div>
 
@@ -51,12 +50,86 @@
             <div class="header-banner">
                 <div>
                     <h2>הערות תלמידים על שיעורים</h2>
-                    <p>מרכז הערות שהתקבלו מתלמידים דרך התפריט הימני ("הערה לאחראי").</p>
                 </div>
             </div>
 
             <div id="notes-list" class="lessons-grid">
                 <!-- Dynamically populated via app.js -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Edit Lesson from Notes -->
+    <div id="edit-lesson-modal" class="modal-overlay" style="z-index: 1000;">
+        <div class="modal-box" style="max-width: 620px; width: 95%;">
+            <div class="modal-header">
+                <h3>✏️ עריכת שיעור ופתרון פנייה</h3>
+                <button class="btn-icon" onclick="closeEditLessonModal()">✕</button>
+            </div>
+            
+            <div class="modal-body" style="padding: 1.25rem 1.5rem;">
+                <div id="edit-modal-note-banner" class="student-note-banner" style="margin-bottom: 1rem;">
+                    <span class="icon">🔔</span>
+                    <div>
+                        <div class="note-content"><strong id="edit-modal-student-name"></strong>: <span id="edit-modal-note-desc"></span></div>
+                        <div class="note-meta" id="edit-modal-note-meta"></div>
+                    </div>
+                </div>
+
+                <!-- Mini Audio Player -->
+                <div class="player-container" style="margin-bottom: 1.25rem;">
+                    <div class="audio-controls">
+                        <button class="btn-icon btn-skip" onclick="skipAudio('edit', -10)" title="10 שניות אחורה"><span>⏪</span><span>10</span></button>
+                        <button class="btn-icon btn-play" id="play-btn-edit" onclick="togglePlay('edit')">▶</button>
+                        <button class="btn-icon btn-skip" onclick="skipAudio('edit', 10)" title="10 שניות קדימה"><span>10</span><span>⏩</span></button>
+                    </div>
+                    <div class="progress-wrap">
+                        <input type="range" class="seek-bar" id="seek-edit" value="0" min="0" step="0.1" onchange="seekAudio('edit')">
+                        <span class="time-display" id="time-edit">00:00 / --:--</span>
+                    </div>
+                    <audio id="audio-edit" preload="metadata" ontimeupdate="updateProgress('edit')" onloadedmetadata="initAudioDuration('edit')" onended="onAudioEnded('edit')"></audio>
+                </div>
+
+                <input type="hidden" id="edit-lesson-source-path">
+                <input type="hidden" id="edit-lesson-note-id">
+
+                <div class="form-field" style="margin-bottom: 0.75rem;">
+                    <label>קובץ מקורי בשרת:</label>
+                    <div id="edit-lesson-filename-display" style="font-weight: 600; color: var(--text-main); word-break: break-all; background: #f1f5f9; padding: 0.5rem 0.75rem; border-radius: 6px; font-size: 0.85rem;"></div>
+                </div>
+
+                <div class="form-field" style="margin-bottom: 0.75rem;">
+                    <label>שם הרב:</label>
+                    <input type="text" class="input-text" id="edit-lesson-rabbi" placeholder="למשל: הרב אורי" required>
+                </div>
+
+                <div class="form-field" style="margin-bottom: 0.75rem;">
+                    <label>נושא / שם השיעור:</label>
+                    <input type="text" class="input-text" id="edit-lesson-topic" placeholder="למשל: פרשת כי תצא">
+                </div>
+
+                <div class="form-field" style="margin-bottom: 0.75rem;">
+                    <label>תאריך עברי:</label>
+                    <input type="text" class="input-text" id="edit-lesson-date">
+                </div>
+
+                <div class="form-field" style="margin-bottom: 1.25rem;">
+                    <label>תיקיית יעד בשרת הישיבה:</label>
+                    <div class="folder-picker-wrap">
+                        <button type="button" class="folder-select-btn" id="folder-btn-edit" onclick="openFolderExplorer('edit-modal')">
+                            <span id="edit-lesson-folder-label">בחר תיקייה...</span>
+                            <span>📁 ▾</span>
+                        </button>
+                        <input type="hidden" id="edit-lesson-dest-path">
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-footer" style="display: flex; justify-content: space-between;">
+                <button class="btn btn-outline" onclick="closeEditLessonModal()">ביטול</button>
+                <button class="btn btn-success" id="edit-lesson-save-btn" onclick="saveEditedLesson()">
+                    💾 שמור שינויים וסמן כטופל
+                </button>
             </div>
         </div>
     </div>

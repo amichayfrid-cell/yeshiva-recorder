@@ -252,6 +252,21 @@ body {
     transition: all 0.2s;
 }
 
+.btn-skip {
+    width: auto !important;
+    min-width: 48px !important;
+    height: 38px !important;
+    padding: 0 8px !important;
+    border-radius: 19px !important;
+    font-size: 0.8rem !important;
+    font-weight: 600 !important;
+    white-space: nowrap !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 3px !important;
+}
+
 .btn-icon:hover {
     background: var(--primary-light);
     color: var(--primary);
@@ -402,6 +417,26 @@ body {
     background: #f1f5f9;
 }
 
+.btn-danger {
+    background-color: var(--danger);
+    color: white;
+}
+
+.btn-danger:hover {
+    background-color: #b91c1c;
+}
+
+.btn-sm {
+    padding: 0.35rem 0.75rem;
+    font-size: 0.85rem;
+}
+
+.note-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+}
+
 /* --- Modal for Folder Explorer --- */
 .modal-overlay {
     position: fixed;
@@ -418,6 +453,10 @@ body {
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.2s;
+}
+
+#folder-modal {
+    z-index: 1100 !important;
 }
 
 .modal-overlay.open {

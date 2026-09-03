@@ -17,7 +17,7 @@ from core.hebrew_date import get_hebrew_date_str
 from core.file_manager import apply_id3_tags, get_unique_filepath
 from web import storage
 
-app = FastAPI(title="מערכת מיון שיעורי תורה", version="2.0.0")
+app = FastAPI(title="מערכת מיון שיעורי הישיבה", version="2.0.0")
 
 BASE_WEB_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_WEB_DIR / "templates"
@@ -93,7 +93,8 @@ def login_page(request: Request, error: Optional[str] = None):
 def process_login(password: str = Form(...)):
     if password == ADMIN_PASSWORD:
         response = RedirectResponse(url="/admin", status_code=status.HTTP_302_FOUND)
-        response.set_cookie(key=COOKIE_NAME, value=ADMIN_PASSWORD, httponly=True, max_age=86400 * 30)
+        # Session cookie: deleted when browser is closed
+        response.set_cookie(key=COOKIE_NAME, value=ADMIN_PASSWORD, httponly=True)
         return response
     return RedirectResponse(url="/login?error=1", status_code=status.HTTP_302_FOUND)
 
@@ -287,3 +288,169 @@ def change_note_status(request: Request, note_id: int = Form(...), status: str =
 
     success = storage.update_note_status(note_id, status)
     return JSONResponse({"status": "success" if success else "error"})
+
+def locate_lesson_file(filename: str, original_path: Optional[str] = None) -> Optional[Path]:
+    """Locates an audio file anywhere in the sorting directory or network share."""
+    clean_fn = os.path.basename(filename.replace('\\', '/'))
+    
+    # 1. Check sorting dir first
+    sorting_dir = get_sorting_dir()
+    p = sorting_dir / clean_fn
+    if p.exists() and p.is_file():
+        return p
+
+    # 2. Check if filename itself is an absolute path that exists
+    p_direct = Path(filename)
+    if p_direct.exists() and p_direct.is_file():
+        return p_direct
+        
+    # 3. Check original_path if provided
+    if original_path:
+        p_orig = Path(original_path.replace('\\', '/'))
+        if p_orig.exists() and p_orig.is_file():
+            return p_orig
+
+    # 4. Search within NETWORK_MOUNT_POINT / LOCAL_STAGING_DIR
+    root = config.NETWORK_MOUNT_POINT if config.NETWORK_MOUNT_POINT.exists() else config.LOCAL_STAGING_DIR
+    if root.exists():
+        for dirpath, _, filenames in os.walk(root):
+            if clean_fn in filenames:
+                return Path(dirpath) / clean_fn
+                
+    return None
+
+@app.get("/api/lessons/details_for_edit")
+def get_lesson_details_for_edit(request: Request, filename: str = Query(...), note_id: Optional[int] = Query(None)):
+    if not is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    file_path = locate_lesson_file(filename)
+    if not file_path or not file_path.exists():
+        return JSONResponse({"status": "success", "found": False})
+    
+    name_no_ext = file_path.stem
+    rabbi = ""
+    topic = ""
+    hebrew_date = ""
+    
+    # Try parsing date in parentheses: (יב אלול תשפו)
+    date_match = re.search(r"\(([^)]+)\)$", name_no_ext)
+    if date_match:
+        hebrew_date = date_match.group(1).replace("_", " ")
+        name_no_ext = name_no_ext[:date_match.start()].rstrip("_ ")
+        
+    parts = name_no_ext.split("_")
+    if len(parts) >= 2:
+        rabbi = parts[0].strip()
+        topic = "_".join(parts[1:]).strip()
+    elif len(parts) == 1:
+        rabbi = parts[0].strip()
+
+    if not hebrew_date:
+        file_dt = datetime.fromtimestamp(file_path.stat().st_mtime)
+        hebrew_date = get_hebrew_date_str(file_dt)
+
+    root_str = str(config.NETWORK_MOUNT_POINT if config.NETWORK_MOUNT_POINT.exists() else config.LOCAL_STAGING_DIR)
+    try:
+        rel_folder = os.path.relpath(str(file_path.parent), root_str)
+        if rel_folder == ".":
+            rel_folder = "ראשי (שרת הישיבה)"
+    except Exception:
+        rel_folder = str(file_path.parent)
+
+    return JSONResponse({
+        "status": "success",
+        "found": True,
+        "filename": file_path.name,
+        "full_path": str(file_path),
+        "parent_folder": str(file_path.parent),
+        "parent_folder_rel": rel_folder,
+        "rabbi": rabbi,
+        "topic": topic,
+        "hebrew_date": hebrew_date
+    })
+
+@app.post("/api/lessons/update")
+def update_lesson(
+    request: Request,
+    source_path: str = Form(...),
+    rabbi_name: str = Form(...),
+    lesson_topic: Optional[str] = Form(""),
+    hebrew_date: str = Form(...),
+    destination_folder: str = Form(...),
+    note_id: Optional[int] = Form(None)
+):
+    if not is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    source_file = Path(source_path)
+    if not source_file.exists() or not source_file.is_file():
+        raise HTTPException(status_code=404, detail="Source file not found")
+
+    dest_dir = Path(destination_folder)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = source_file.suffix.lower()
+    clean_rabbi = rabbi_name.strip().replace("/", "-")
+    clean_topic = lesson_topic.strip().replace("/", "-") if lesson_topic else ""
+    clean_date = hebrew_date.strip().replace("/", "-")
+
+    if clean_topic:
+        final_filename = f"{clean_rabbi}_{clean_topic}_({clean_date}){ext}"
+    else:
+        final_filename = f"{clean_rabbi}_({clean_date}){ext}"
+
+    unique_dest_path = get_unique_filepath(dest_dir, final_filename)
+
+    # 1. Update ID3 tags
+    metadata = {
+        "rabbi": clean_rabbi,
+        "topic": clean_topic,
+        "status": "classified"
+    }
+    try:
+        apply_id3_tags(source_file, metadata, clean_date)
+    except Exception as e:
+        print(f"[Update Lesson] ID3 tagging skipped: {e}")
+
+    # 2. Rename / Move
+    try:
+        shutil.move(str(source_file), str(unique_dest_path))
+    except Exception as e:
+        shutil.copy2(str(source_file), str(unique_dest_path))
+        source_file.unlink(missing_ok=True)
+
+    # 3. Mark note as resolved if provided
+    if note_id:
+        storage.update_note_status(note_id, "resolved")
+    
+    # Also resolve notes for old source file name
+    for note in storage.get_notes_for_file(source_file.name):
+        storage.update_note_status(note["id"], "resolved")
+
+    return JSONResponse({
+        "status": "success",
+        "final_path": str(unique_dest_path),
+        "filename": unique_dest_path.name
+    })
+
+@app.post("/api/lessons/delete")
+def delete_lesson(request: Request, filename: str = Form(...)):
+    if not is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    clean_fn = os.path.basename(filename.replace('\\', '/'))
+    sorting_dir = get_sorting_dir()
+    file_path = sorting_dir / clean_fn
+
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    try:
+        file_path.unlink()
+        # Resolve any open notes for this file
+        for note in storage.get_notes_for_file(clean_fn):
+            storage.update_note_status(note["id"], "resolved")
+        return JSONResponse({"status": "success", "message": "הקובץ נמחק בהצלחה"})
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)

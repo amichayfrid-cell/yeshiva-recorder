@@ -85,9 +85,9 @@ function renderPendingLessons() {
                 <!-- Audio Player -->
                 <div class="player-container">
                     <div class="audio-controls">
-                        <button class="btn-icon" onclick="skipAudio('${index}', -10)" title="10 שניות אחורה">⏪ 10</button>
+                        <button class="btn-icon btn-skip" onclick="skipAudio('${index}', -10)" title="10 שניות אחורה"><span>⏪</span><span>10</span></button>
                         <button class="btn-icon btn-play" id="play-btn-${index}" onclick="togglePlay('${index}')">▶</button>
-                        <button class="btn-icon" onclick="skipAudio('${index}', 10)" title="10 שניות קדימה">10 ⏩</button>
+                        <button class="btn-icon btn-skip" onclick="skipAudio('${index}', 10)" title="10 שניות קדימה"><span>10</span><span>⏩</span></button>
                     </div>
                     <div class="progress-wrap">
                         <input type="range" class="seek-bar" id="seek-${index}" value="0" min="0" step="0.1" onchange="seekAudio('${index}')">
@@ -120,9 +120,14 @@ function renderPendingLessons() {
                             <input type="hidden" id="dest-path-${index}">
                         </div>
                     </div>
-                    <button class="btn btn-success" onclick="classifyLesson('${index}', '${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}')">
-                        💾 שמור וסווג
-                    </button>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <button class="btn btn-success" onclick="classifyLesson('${index}', '${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}')">
+                            💾 שמור וסווג
+                        </button>
+                        <button type="button" class="btn btn-danger" onclick="deleteLesson('${index}', '${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}')" title="מחק הקלטה לצמיתות">
+                            🗑️ מחק
+                        </button>
+                    </div>
                 </div>
             </div>
         `;
@@ -372,7 +377,10 @@ function fetchFolderByRelativePath(relPath) {
 }
 
 function confirmCurrentFolderSelection() {
-    if (activeCardIndex !== null && currentFolderData) {
+    if (activeCardIndex === "edit-modal" && currentFolderData) {
+        document.getElementById("edit-lesson-dest-path").value = currentFolderData.current_full_path;
+        document.getElementById("edit-lesson-folder-label").innerText = currentFolderData.current_rel_path || "ראשי (שרת הישיבה)";
+    } else if (activeCardIndex !== null && currentFolderData) {
         document.getElementById(`dest-path-${activeCardIndex}`).value = currentFolderData.current_full_path;
         document.getElementById(`folder-label-${activeCardIndex}`).innerText = currentFolderData.current_rel_path || "ראשי (שורש)";
     }
@@ -529,9 +537,12 @@ function renderAllNotes() {
                     <p><strong>פירוט:</strong> ${escapeHtml(note.description)}</p>
                     <p style="font-size: 0.85rem; color: var(--text-muted);"><strong>נשלח ע"י:</strong> ${escapeHtml(note.student_name)}</p>
                 </div>
-                ${note.status === 'open' ? `
-                    <button class="btn btn-outline" onclick="resolveNote(${note.id})">✓ סמן כטופל</button>
-                ` : ''}
+                <div class="note-actions">
+                    <button class="btn btn-primary btn-sm" onclick="openEditLessonModal('${encodeURIComponent(note.filename).replace(/'/g, '%27')}', ${note.id})">✏️ ערוך שיעור</button>
+                    ${note.status === 'open' ? `
+                        <button class="btn btn-outline btn-sm" onclick="resolveNote(${note.id})">✓ סמן כטופל</button>
+                    ` : ''}
+                </div>
             </div>
         `).join("");
     }
@@ -555,4 +566,149 @@ function escapeHtml(str) {
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
+}
+
+// Delete Lesson with active confirmation
+async function deleteLesson(index, encodedFilename) {
+    const filename = decodeURIComponent(encodedFilename);
+    const confirmMsg = `האם אתה בטוח שברצונך למחוק לצמיתות את ההקלטה?\n\n"${filename}"\n\nפעולה זו אינה ניתנת לביטול!`;
+    if (!confirm(confirmMsg)) {
+        return;
+    }
+
+    const card = document.getElementById(`card-${index}`);
+    if (card) {
+        card.style.opacity = "0.4";
+        card.style.pointerEvents = "none";
+    }
+
+    try {
+        const form = new FormData();
+        form.append("filename", filename);
+
+        const res = await fetch("/api/lessons/delete", { method: "POST", body: form });
+        const data = await res.json();
+
+        if (data.status === "success") {
+            if (card) card.remove();
+            pendingLessons.splice(index, 1);
+            document.getElementById("pending-count").innerText = pendingLessons.length;
+            if (pendingLessons.length === 0) {
+                renderPendingLessons();
+            }
+            alert(`✓ הקובץ נמחק בהצלחה:\n${filename}`);
+        } else {
+            alert(data.message || data.detail || "שגיאה במחיקת הקובץ");
+            if (card) {
+                card.style.opacity = "1";
+                card.style.pointerEvents = "auto";
+            }
+        }
+    } catch (e) {
+        alert("שגיאת תקשורת: " + e.message);
+        if (card) {
+            card.style.opacity = "1";
+            card.style.pointerEvents = "auto";
+        }
+    }
+}
+
+// Open Edit Lesson Modal from Note
+async function openEditLessonModal(encodedFilename, noteId) {
+    const filename = decodeURIComponent(encodedFilename);
+    const note = allNotes.find(n => n.id === noteId);
+
+    if (note) {
+        document.getElementById("edit-modal-student-name").innerText = note.student_name || "תלמיד אנונימי";
+        document.getElementById("edit-modal-note-desc").innerText = note.description || "";
+        document.getElementById("edit-modal-note-meta").innerText = `נשלח בתאריך: ${note.created_at}`;
+    }
+    document.getElementById("edit-lesson-note-id").value = noteId || "";
+
+    try {
+        const res = await fetch(`/api/lessons/details_for_edit?filename=${encodeURIComponent(filename)}&note_id=${noteId || ''}`);
+        const data = await res.json();
+
+        if (!data.found) {
+            alert(`⚠️ הקובץ '${filename}' לא נמצא כרגע בשרת (ייתכן שכבר הועבר או נמחק).`);
+            return;
+        }
+
+        document.getElementById("edit-lesson-source-path").value = data.full_path;
+        document.getElementById("edit-lesson-filename-display").innerText = data.filename;
+        document.getElementById("edit-lesson-rabbi").value = data.rabbi || "";
+        document.getElementById("edit-lesson-topic").value = data.topic || "";
+        document.getElementById("edit-lesson-date").value = data.hebrew_date || "";
+        document.getElementById("edit-lesson-dest-path").value = data.parent_folder || "";
+        document.getElementById("edit-lesson-folder-label").innerText = data.parent_folder_rel || "בחר תיקייה...";
+
+        const audio = document.getElementById("audio-edit");
+        audio.src = `/api/audio/stream?filename=${encodeURIComponent(data.full_path).replace(/'/g, '%27')}`;
+        audio.load();
+
+        document.getElementById("edit-lesson-modal").classList.add("open");
+    } catch (e) {
+        alert("שגיאה בטעינת פרטי הקובץ: " + e.message);
+    }
+}
+
+function closeEditLessonModal() {
+    const audio = document.getElementById("audio-edit");
+    if (audio) {
+        audio.pause();
+    }
+    const playBtn = document.getElementById("play-btn-edit");
+    if (playBtn) playBtn.innerText = "▶";
+    document.getElementById("edit-lesson-modal").classList.remove("open");
+}
+
+async function saveEditedLesson() {
+    const sourcePath = document.getElementById("edit-lesson-source-path").value;
+    const noteId = document.getElementById("edit-lesson-note-id").value;
+    const rabbi = document.getElementById("edit-lesson-rabbi").value.trim();
+    const topic = document.getElementById("edit-lesson-topic").value.trim();
+    const hebrewDate = document.getElementById("edit-lesson-date").value.trim();
+    const destFolder = document.getElementById("edit-lesson-dest-path").value.trim();
+
+    if (!rabbi) {
+        alert("אנא הזן את שם הרב");
+        document.getElementById("edit-lesson-rabbi").focus();
+        return;
+    }
+    if (!destFolder) {
+        alert("אנא בחר תיקיית יעד בשרת הישיבה");
+        openFolderExplorer("edit-modal");
+        return;
+    }
+
+    const saveBtn = document.getElementById("edit-lesson-save-btn");
+    saveBtn.disabled = true;
+    saveBtn.innerText = "שומר...";
+
+    try {
+        const form = new FormData();
+        form.append("source_path", sourcePath);
+        form.append("rabbi_name", rabbi);
+        form.append("lesson_topic", topic);
+        form.append("hebrew_date", hebrewDate);
+        form.append("destination_folder", destFolder);
+        if (noteId) form.append("note_id", noteId);
+
+        const res = await fetch("/api/lessons/update", { method: "POST", body: form });
+        const data = await res.json();
+
+        if (data.status === "success") {
+            closeEditLessonModal();
+            await loadNotes();
+            await loadPendingLessons();
+            alert(`✓ השיעור עודכן בהצלחה!\nשם חדש: ${data.filename}`);
+        } else {
+            alert(data.message || data.detail || "שגיאה בעדכון השיעור");
+        }
+    } catch (e) {
+        alert("שגיאת תקשורת: " + e.message);
+    } finally {
+        saveBtn.disabled = false;
+        saveBtn.innerText = "💾 שמור שינויים וסמן כטופל";
+    }
 }

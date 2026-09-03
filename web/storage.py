@@ -14,12 +14,33 @@ FOLDER_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
 CACHE_TTL_SEC = 30.0
 
 def get_notes_data() -> List[Dict[str, Any]]:
-    """Loads all student feedback notes."""
+    """Loads all student feedback notes and auto-deletes notes older than 30 days."""
     if not NOTES_FILE.exists():
         return []
     try:
         with open(NOTES_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            notes = json.load(f)
+        
+        now = datetime.now()
+        valid_notes = []
+        modified = False
+        for n in notes:
+            created_str = n.get("created_at")
+            if created_str:
+                try:
+                    dt = datetime.strptime(created_str, "%Y-%m-%d %H:%M:%S")
+                    if (now - dt).days >= 30:
+                        modified = True
+                        continue
+                except Exception:
+                    pass
+            valid_notes.append(n)
+            
+        if modified:
+            with open(NOTES_FILE, "w", encoding="utf-8") as f:
+                json.dump(valid_notes, f, ensure_ascii=False, indent=2)
+                
+        return valid_notes
     except Exception:
         return []
 
