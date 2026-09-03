@@ -154,28 +154,45 @@ def list_pending_lessons(request: Request):
     lessons = []
 
     if sorting_dir.exists():
-        for f in sorted(sorting_dir.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-            # Clean orphaned CIFS temporary rename files (e.g. .__smb0001)
-            if f.is_file() and ("smb" in f.name.lower()):
+        entries = []
+        try:
+            for p in sorting_dir.iterdir():
                 try:
-                    f.unlink(missing_ok=True)
-                    continue
-                except Exception:
-                    pass
+                    # Ignore and clean any hidden/temporary/CIFS files (like .__smb0001)
+                    if p.name.startswith(".") or "smb" in p.name.lower():
+                        try:
+                            p.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                        continue
 
-            if f.is_file() and f.suffix.lower() in config.USB_AUDIO_EXTENSIONS:
-                file_dt = datetime.fromtimestamp(f.stat().st_mtime)
+                    if p.is_file() and p.suffix.lower() in config.USB_AUDIO_EXTENSIONS:
+                        st = p.stat()
+                        entries.append((p, st))
+                except (OSError, FileNotFoundError, PermissionError):
+                    continue
+        except (OSError, FileNotFoundError, PermissionError):
+            pass
+
+        # Sort safely by mtime
+        entries.sort(key=lambda item: item[1].st_mtime, reverse=True)
+
+        for f, st in entries:
+            try:
+                file_dt = datetime.fromtimestamp(st.st_mtime)
                 hebrew_date = get_hebrew_date_str(file_dt)
                 notes = storage.get_notes_for_file(f.name)
                 
                 lessons.append({
                     "filename": f.name,
-                    "size_bytes": f.stat().st_size,
-                    "size_mb": round(f.stat().st_size / (1024 * 1024), 1),
+                    "size_bytes": st.st_size,
+                    "size_mb": round(st.st_size / (1024 * 1024), 1),
                     "created_time": file_dt.strftime("%H:%M"),
                     "hebrew_date": hebrew_date,
                     "notes": notes
                 })
+            except Exception:
+                continue
 
     return JSONResponse({"status": "success", "lessons": lessons, "target_dir": str(sorting_dir)})
 
