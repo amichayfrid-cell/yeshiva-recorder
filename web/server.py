@@ -155,6 +155,14 @@ def list_pending_lessons(request: Request):
 
     if sorting_dir.exists():
         for f in sorted(sorting_dir.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            # Clean orphaned CIFS temporary rename files (e.g. .__smb0001)
+            if f.is_file() and ("smb" in f.name.lower()):
+                try:
+                    f.unlink(missing_ok=True)
+                    continue
+                except Exception:
+                    pass
+
             if f.is_file() and f.suffix.lower() in config.USB_AUDIO_EXTENSIONS:
                 file_dt = datetime.fromtimestamp(f.stat().st_mtime)
                 hebrew_date = get_hebrew_date_str(file_dt)
@@ -449,6 +457,15 @@ def delete_lesson(request: Request, filename: str = Form(...)):
 
     try:
         file_path.unlink()
+        
+        # Clean any CIFS temporary files in sorting dir
+        for f in sorting_dir.iterdir():
+            if f.is_file() and ("smb" in f.name.lower()):
+                try:
+                    f.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
         # Resolve any open notes for this file
         for note in storage.get_notes_for_file(clean_fn):
             storage.update_note_status(note["id"], "resolved")

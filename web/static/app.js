@@ -444,6 +444,18 @@ async function classifyLesson(index, encodedFilename) {
     card.style.opacity = "0.5";
     card.style.pointerEvents = "none";
 
+    // Unload audio to close file descriptor on server before moving
+    const audio = document.getElementById(`audio-${index}`);
+    if (audio) {
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.load();
+    }
+    if (currentAudio === audio) {
+        currentAudio = null;
+        currentPlayBtn = null;
+    }
+
     try {
         const form = new FormData();
         form.append("filename", filename);
@@ -586,6 +598,18 @@ async function deleteLesson(index, encodedFilename) {
     if (card) {
         card.style.opacity = "0.4";
         card.style.pointerEvents = "none";
+    }
+
+    // Unload audio to close file descriptor on server before deleting
+    const audio = document.getElementById(`audio-${index}`);
+    if (audio) {
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.load();
+    }
+    if (currentAudio === audio) {
+        currentAudio = null;
+        currentPlayBtn = null;
     }
 
     try {
