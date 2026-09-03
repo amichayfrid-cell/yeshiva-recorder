@@ -10,7 +10,7 @@ ExecStart=/home/lessons/yeshiva-recorder/venv/bin/uvicorn web.server:app --host 
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
-Environment=ADMIN_PASSWORD=1234
+Environment=ADMIN_PASSWORD=Audio8
 
 [Install]
 WantedBy=multi-user.target

@@ -26,7 +26,7 @@ STATIC_DIR = BASE_WEB_DIR / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "1234")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "Audio8")
 COOKIE_NAME = "yeshiva_session"
 
 def is_authenticated(request: Request) -> bool:
