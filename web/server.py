@@ -27,7 +27,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "1234")
-COOKIE_NAME = "yeshiva_admin_auth"
+COOKIE_NAME = "yeshiva_session"
 
 def is_authenticated(request: Request) -> bool:
     return request.cookies.get(COOKIE_NAME) == ADMIN_PASSWORD
@@ -102,6 +102,7 @@ def process_login(password: str = Form(...)):
 def logout():
     response = RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     response.delete_cookie(key=COOKIE_NAME)
+    response.delete_cookie(key="yeshiva_admin_auth")
     return response
 
 @app.get("/admin", response_class=HTMLResponse)

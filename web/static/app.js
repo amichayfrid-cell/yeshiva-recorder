@@ -14,6 +14,12 @@ document.addEventListener("DOMContentLoaded", () => {
     setupKeyboardListeners();
 });
 
+// Refresh all views
+function refreshAll() {
+    loadPendingLessons();
+    loadNotes();
+}
+
 // Tab Switching
 function switchTab(tab) {
     document.getElementById("view-pending").style.display = tab === "pending" ? "block" : "none";
