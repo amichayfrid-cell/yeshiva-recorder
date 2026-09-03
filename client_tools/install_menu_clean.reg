@@ -1,11 +1,26 @@
 Windows Registry Editor Version 5.00
 
-; הוספת הפריט לקבצי MP3
-[HKEY_CLASSES_ROOT\SystemFileAssociations\.mp3\shell\YeshivaStudentFeedback]
-; המשפט "השאר הערה לאחראי השמע" מקודד ב-Hex כדי למנוע ג'יבריש בשפות שונות
+; הגדרה לכלל קבצי השמע (MP3, WAV, M4A וכו')
+[HKEY_CLASSES_ROOT\SystemFileAssociations\audio\shell\YeshivaStudentFeedback]
 @=hex(1):d4,05,e9,05,d0,05,e8,05,20,00,d4,05,e2,05,e8,05,d4,05,20,00,dc,05,d0,05,d7,05,e8,05,d0,05,d9,05,20,00,d4,05,e9,05,de,05,e2,05,00,00
 "Icon"="shell32.dll,269"
 
-; פתיחת הקישור שקטה לחלוטין ללא חלון קונסולה שחור
+[HKEY_CLASSES_ROOT\SystemFileAssociations\audio\shell\YeshivaStudentFeedback\command]
+@="rundll32.exe url.dll,FileProtocolHandler \"http://192.168.1.244:8000/student?file=%1\""
+
+; הגדרה ספציפית לקבצי .mp3
+[HKEY_CLASSES_ROOT\SystemFileAssociations\.mp3\shell\YeshivaStudentFeedback]
+@=hex(1):d4,05,e9,05,d0,05,e8,05,20,00,d4,05,e2,05,e8,05,d4,05,20,00,dc,05,d0,05,d7,05,e8,05,d0,05,d9,05,20,00,d4,05,e9,05,de,05,e2,05,00,00
+"Icon"="shell32.dll,269"
+
 [HKEY_CLASSES_ROOT\SystemFileAssociations\.mp3\shell\YeshivaStudentFeedback\command]
 @="rundll32.exe url.dll,FileProtocolHandler \"http://192.168.1.244:8000/student?file=%1\""
+
+; הגדרה ספציפית לקבצי .wav
+[HKEY_CLASSES_ROOT\SystemFileAssociations\.wav\shell\YeshivaStudentFeedback]
+@=hex(1):d4,05,e9,05,d0,05,e8,05,20,00,d4,05,e2,05,e8,05,d4,05,20,00,dc,05,d0,05,d7,05,e8,05,d0,05,d9,05,20,00,d4,05,e9,05,de,05,e2,05,00,00
+"Icon"="shell32.dll,269"
+
+[HKEY_CLASSES_ROOT\SystemFileAssociations\.wav\shell\YeshivaStudentFeedback\command]
+@="rundll32.exe url.dll,FileProtocolHandler \"http://192.168.1.244:8000/student?file=%1\""
+
