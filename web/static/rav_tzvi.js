@@ -220,8 +220,9 @@ async function playAudio(fileSubpath, filename) {
   }
 
   currentPlayingSubpath = fileSubpath;
-  playerTrackName.textContent = filename.replace(/\.[^/.]+$/, ''); // Strip extension
+  playerTrackName.textContent = 'טוען... ' + filename.replace(/\.[^/.]+$/, '');
   playerTrackName.title = filename;
+  playIcon.textContent = '⏳';
 
   try {
     const tokenRes = await fetch(`/api/rav-tzvi/token?file=${encodeURIComponent(fileSubpath)}`, { method: 'POST' });
@@ -231,11 +232,13 @@ async function playAudio(fileSubpath, filename) {
     const streamUrl = `/api/rav-tzvi/stream?file=${encodeURIComponent(fileSubpath)}&token=${tokenData.token}`;
     audio.src = streamUrl;
     audio.playbackRate = parseFloat(speedSelect.value) || 1.0;
+    playerTrackName.textContent = filename.replace(/\.[^/.]+$/, '');
     audio.play();
     
     highlightPlayingFile();
   } catch (e) {
     console.error("Error playing audio:", e);
+    playIcon.textContent = '▶';
     alert("שגיאה בטעינת השיעור או שפג תוקף הקישור.");
   }
 }
@@ -308,6 +311,14 @@ function highlightPlayingFile() {
 audio.addEventListener('play', () => {
   playIcon.textContent = '⏸';
   highlightPlayingFile();
+});
+
+audio.addEventListener('waiting', () => {
+  playIcon.textContent = '⏳';
+});
+
+audio.addEventListener('playing', () => {
+  playIcon.textContent = '⏸';
 });
 
 audio.addEventListener('pause', () => {

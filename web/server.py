@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import shutil
 import mimetypes
 from pathlib import Path
@@ -564,11 +565,21 @@ def find_rav_tzvi_archive(base_mount: Path) -> Optional[Path]:
         pass
     return None
 
+_RAV_TZVI_SOURCES_CACHE = None
+_RAV_TZVI_CACHE_TIME = 0.0
+RAV_TZVI_CACHE_TTL = 30.0  # Cache sources for 30s to prevent constant SMB share re-scanning
+
 def get_rav_tzvi_sources() -> Dict[str, Dict[str, Any]]:
     """
     Dynamically scans the network share to discover Rav Tzvi's current zman folder
     (e.g., 'אלול התשפ''ו' or whatever it changes to) and the Archive folder.
+    Cached for 30s to ensure instantaneous responses without hammering the SMB network mount.
     """
+    global _RAV_TZVI_SOURCES_CACHE, _RAV_TZVI_CACHE_TIME
+    now = time.time()
+    if _RAV_TZVI_SOURCES_CACHE is not None and (now - _RAV_TZVI_CACHE_TIME) < RAV_TZVI_CACHE_TTL:
+        return _RAV_TZVI_SOURCES_CACHE
+
     sources = {}
     base_mount = config.NETWORK_MOUNT_POINT if config.NETWORK_MOUNT_POINT.exists() else config.LOCAL_STAGING_DIR
     
@@ -609,6 +620,8 @@ def get_rav_tzvi_sources() -> Dict[str, Dict[str, Any]]:
             "path": local_dir
         }
         
+    _RAV_TZVI_SOURCES_CACHE = sources
+    _RAV_TZVI_CACHE_TIME = now
     return sources
 
 def resolve_rav_tzvi_path(subpath: str = "") -> Tuple[Optional[Path], Optional[str], Optional[Path]]:
@@ -825,16 +838,41 @@ def stream_rav_tzvi(file: str = Query(..., description="Relative file subpath"),
 
     range_header = request.headers.get("range") if request else None
 
+    # Default chunk size for instant audio start (1 MB = ~65 seconds of 128kbps audio)
+    # Allows browser to start playback in < 20ms over the network mount instead of loading 50MB
+    CHUNK_SIZE = 1024 * 1024  # 1 MB
+
     if not range_header:
-        response = FileResponse(path=file_path, media_type=mime_type, filename=file_path.name)
-        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        return response
+        start = 0
+        end = min(CHUNK_SIZE - 1, file_size - 1)
+        length = end - start + 1
+        with open(file_path, "rb") as f:
+            data = f.read(length)
+        headers = {
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(length),
+            "Content-Type": mime_type,
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"
+        }
+        return Response(content=data, status_code=206, headers=headers)
 
     try:
         byte_range = range_header.replace("bytes=", "").split("-")
         start = int(byte_range[0])
-        end = int(byte_range[1]) if byte_range[1] else file_size - 1
+        
+        # If browser requested open-ended range (e.g. bytes=0-), cap at 1MB
+        if byte_range[1] and byte_range[1].strip():
+            end = int(byte_range[1])
+        else:
+            end = start + CHUNK_SIZE - 1
+
         end = min(end, file_size - 1)
+        # Cap range to 2MB max per request so reads over SMB are instantaneous
+        if end - start + 1 > 2 * 1024 * 1024:
+            end = start + 2 * 1024 * 1024 - 1
+            end = min(end, file_size - 1)
+
         length = end - start + 1
 
         with open(file_path, "rb") as f:
@@ -849,7 +887,8 @@ def stream_rav_tzvi(file: str = Query(..., description="Relative file subpath"),
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"
         }
         return Response(content=data, status_code=206, headers=headers)
-    except Exception:
+    except Exception as e:
+        print(f"[Streaming Error]: {e}")
         response = FileResponse(path=file_path, media_type=mime_type, filename=file_path.name)
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         return response
