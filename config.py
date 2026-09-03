@@ -6,6 +6,8 @@ DATA_DIR = BASE_DIR / "data"
 
 INCOMING_DIR = DATA_DIR / "incoming"
 LOCAL_STAGING_DIR = DATA_DIR / "needs_review"  # Local storage buffer (Stage 1)
+RAV_TZVI_DIR = DATA_DIR / "rav_tzvi"
+STATIC_DIR = BASE_DIR / "web" / "static"
 HISTORY_FILE = DATA_DIR / "history.json"
 MAX_HISTORY_ENTRIES = 500  # Maximum records in history
 

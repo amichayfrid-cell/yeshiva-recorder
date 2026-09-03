@@ -3,11 +3,12 @@ import re
 import shutil
 import mimetypes
 from pathlib import Path
-from datetime import datetime
-from typing import Optional, List, Dict, Any
+import secrets
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict, Any, Tuple
 
 from fastapi import FastAPI, Request, Form, Depends, HTTPException, status, Query
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, RedirectResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -489,3 +490,374 @@ def delete_lesson(request: Request, filename: str = Form(...)):
         return JSONResponse({"status": "success", "message": "הקובץ נמחק בהצלחה"})
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+# ==========================================
+# Rav Tzvi Protected Streaming Logic
+# ==========================================
+STREAMING_TOKENS = {}
+
+@app.post("/api/rav-tzvi/token")
+def get_stream_token(file: str = Query(..., description="Relative file subpath")):
+    import secrets
+    from datetime import datetime, timedelta
+    token = secrets.token_urlsafe(16)
+    # Token valid for 30 seconds
+    STREAMING_TOKENS[token] = {"file": file, "expires": datetime.now() + timedelta(seconds=30)}
+    
+    # Cleanup old tokens
+    now = datetime.now()
+    expired = [t for t, data in STREAMING_TOKENS.items() if data["expires"] < now]
+    for t in expired:
+        STREAMING_TOKENS.pop(t, None)
+        
+    return {"token": token}
+
+def find_rav_tzvi_in_folder(folder: Path) -> Optional[Path]:
+    """Finds Rav Tzvi Kostiner's folder inside a given semester or year folder."""
+    # Exclude non-semester collections
+    if "רבנים שונים" in folder.name or "הגברת החירות" in folder.name:
+        return None
+
+    # 1. Exact canonical path: folder / "רבני הישיבה" / "הרב צבי קוסטינר"
+    cand = folder / "רבני הישיבה" / "הרב צבי קוסטינר"
+    if cand.exists() and cand.is_dir():
+        return cand
+        
+    # 2. Check inside "רבני הישיבה" for Kostiner specifically (prevent 'הרב צבי יהודה')
+    cand2 = folder / "רבני הישיבה"
+    if cand2.exists() and cand2.is_dir():
+        for sub in cand2.iterdir():
+            if sub.is_dir() and "קוסטינר" in sub.name and "יהודה" not in sub.name:
+                return sub
+
+    # 3. Direct folder search for Kostiner specifically
+    try:
+        for sub in folder.iterdir():
+            if sub.is_dir() and "קוסטינר" in sub.name and "יהודה" not in sub.name:
+                return sub
+    except Exception:
+        pass
+            
+    return None
+
+def find_rav_tzvi_archive(base_mount: Path) -> Optional[Path]:
+    """Finds Rav Tzvi's archive folder on the network share."""
+    archive_base = base_mount / "ארכיון שיעורי הישיבה"
+    if not archive_base.exists():
+        return None
+        
+    p1 = archive_base / "רבני הישיבה" / "הרב צבי קוסטינר - ניהול בלבד"
+    if p1.exists() and p1.is_dir():
+        return p1
+        
+    p2 = archive_base / "רבני הישיבה" / "הרב צבי קוסטינר"
+    if p2.exists() and p2.is_dir():
+        return p2
+        
+    try:
+        rabbi_dir = archive_base / "רבני הישיבה"
+        if rabbi_dir.exists():
+            for d in rabbi_dir.iterdir():
+                if d.is_dir() and "קוסטינר" in d.name and "יהודה" not in d.name:
+                    return d
+    except Exception:
+        pass
+    return None
+
+def get_rav_tzvi_sources() -> Dict[str, Dict[str, Any]]:
+    """
+    Dynamically scans the network share to discover Rav Tzvi's current zman folder
+    (e.g., 'אלול התשפ''ו' or whatever it changes to) and the Archive folder.
+    """
+    sources = {}
+    base_mount = config.NETWORK_MOUNT_POINT if config.NETWORK_MOUNT_POINT.exists() else config.LOCAL_STAGING_DIR
+    
+    EXCLUDED = {
+        "ארכיון שיעורי הישיבה", 
+        "שיעורים למיון", 
+        "אחראי שמע", 
+        "רבנים שונים",
+        "על הגברת החירות [פלאפונים וכו'] - רבנים שונים",
+        "lost+found", 
+        "$RECYCLE.BIN", 
+        "System Volume Information"
+    }
+    if base_mount.exists() and base_mount.is_dir():
+        for item in sorted(base_mount.iterdir(), key=lambda x: x.name, reverse=True):
+            if item.is_dir() and not item.name.startswith(".") and item.name not in EXCLUDED and "רבנים שונים" not in item.name:
+                rt_folder = find_rav_tzvi_in_folder(item)
+                if rt_folder:
+                    slug = re.sub(r'[^a-zA-Z0-9_\u0590-\u05FF]', '_', item.name).strip("_")
+                    key = f"current_{slug}"
+                    sources[key] = {
+                        "display_name": f"שיעורים שוטפים ({item.name})",
+                        "path": rt_folder
+                    }
+                    
+    arch = find_rav_tzvi_archive(base_mount)
+    if arch:
+        sources["archive"] = {
+            "display_name": "ארכיון שיעורי הרב צבי",
+            "path": arch
+        }
+        
+    if not sources:
+        local_dir = config.RAV_TZVI_DIR
+        local_dir.mkdir(parents=True, exist_ok=True)
+        sources["local"] = {
+            "display_name": "שיעורי הרב צבי",
+            "path": local_dir
+        }
+        
+    return sources
+
+def resolve_rav_tzvi_path(subpath: str = "") -> Tuple[Optional[Path], Optional[str], Optional[Path]]:
+    """
+    Resolves virtual subpath to an actual filesystem Path.
+    Returns: (actual_path, root_key, base_root_path)
+    If subpath is empty, returns (None, None, None) which signals the Root View.
+    """
+    if not subpath or subpath.strip() == "" or subpath == ".":
+        return None, None, None
+        
+    clean_sub = os.path.normpath(subpath).replace("\\", "/").strip("/")
+    parts = clean_sub.split("/")
+    root_key = parts[0]
+    rel_sub = "/".join(parts[1:])
+    
+    sources = get_rav_tzvi_sources()
+    if root_key not in sources:
+        raise HTTPException(status_code=404, detail="Library section not found")
+        
+    base = sources[root_key]["path"].resolve()
+    if not rel_sub:
+        return base, root_key, base
+        
+    target = (base / rel_sub).resolve()
+    if not str(target).startswith(str(base)):
+        raise HTTPException(status_code=400, detail="Invalid path traversal")
+        
+    return target, root_key, base
+
+@app.get("/api/rav-tzvi/browse")
+def browse_rav_tzvi(subpath: str = Query("", description="Relative folder subpath")):
+    """
+    Browses Rav Tzvi Kostiner's protected library in an Explorer-like structure.
+    Returns breadcrumbs, folders, and playable audio files.
+    """
+    sources = get_rav_tzvi_sources()
+    target_path, root_key, base_path = resolve_rav_tzvi_path(subpath)
+    
+    # 1. Top-Level Root View (Sections: Current Semester + Archive)
+    if target_path is None:
+        folders = []
+        for key, info in sources.items():
+            p = info["path"]
+            audio_count = 0
+            subfolder_count = 0
+            if p.exists():
+                try:
+                    audio_count = len([f for f in p.iterdir() if f.is_file() and f.suffix.lower() in config.USB_AUDIO_EXTENSIONS])
+                    subfolder_count = len([f for f in p.iterdir() if f.is_dir() and not f.name.startswith(".")])
+                except Exception:
+                    pass
+            folders.append({
+                "name": info["display_name"],
+                "subpath": key,
+                "audio_count": audio_count,
+                "subfolder_count": subfolder_count
+            })
+        return {
+            "current_subpath": "",
+            "breadcrumbs": [{"name": "שיעורי הרב צבי", "subpath": ""}],
+            "folders": folders,
+            "files": [],
+            "total_items": len(folders)
+        }
+
+    # 2. Inside a section or folder
+    if not target_path.exists() or not target_path.is_dir():
+        raise HTTPException(status_code=404, detail="Directory not found")
+
+    rel_inside_base = target_path.relative_to(base_path).as_posix()
+    if rel_inside_base == ".":
+        rel_inside_base = ""
+
+    root_display = sources[root_key]["display_name"]
+    breadcrumbs = [
+        {"name": "שיעורי הרב צבי", "subpath": ""},
+        {"name": root_display, "subpath": root_key}
+    ]
+    if rel_inside_base:
+        parts = rel_inside_base.split("/")
+        accumulated = [root_key]
+        for part in parts:
+            accumulated.append(part)
+            breadcrumbs.append({
+                "name": part,
+                "subpath": "/".join(accumulated)
+            })
+
+    folders = []
+    files = []
+
+    for item in sorted(target_path.iterdir(), key=lambda x: x.name):
+        if item.name.startswith(".") or item.name == "Thumbs.db":
+            continue
+        rel_to_base = item.relative_to(base_path).as_posix()
+        item_subpath = f"{root_key}/{rel_to_base}"
+        if item.is_dir():
+            audio_count = 0
+            subfolder_count = 0
+            try:
+                audio_count = len([f for f in item.iterdir() if f.is_file() and f.suffix.lower() in config.USB_AUDIO_EXTENSIONS])
+                subfolder_count = len([f for f in item.iterdir() if f.is_dir() and not f.name.startswith(".")])
+            except Exception:
+                pass
+            folders.append({
+                "name": item.name,
+                "subpath": item_subpath,
+                "audio_count": audio_count,
+                "subfolder_count": subfolder_count
+            })
+        elif item.is_file() and item.suffix.lower() in config.USB_AUDIO_EXTENSIONS:
+            stat = item.stat()
+            files.append({
+                "filename": item.name,
+                "subpath": item_subpath,
+                "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat()
+            })
+
+    current_sp = f"{root_key}/{rel_inside_base}".rstrip("/")
+    return {
+        "current_subpath": current_sp,
+        "breadcrumbs": breadcrumbs,
+        "folders": folders,
+        "files": files,
+        "total_items": len(folders) + len(files)
+    }
+
+@app.get("/api/rav-tzvi/search")
+def search_rav_tzvi(q: str = Query("", description="Search query across all folders")):
+    """
+    Recursively searches across all Rav Tzvi library sections matching query q.
+    """
+    query = q.strip().lower()
+    if not query:
+        return {"query": q, "folders": [], "files": [], "total_items": 0}
+
+    sources = get_rav_tzvi_sources()
+    folders = []
+    files = []
+
+    for root_key, info in sources.items():
+        base = info["path"]
+        if not base.exists():
+            continue
+        try:
+            for item in base.rglob("*"):
+                if item.name.startswith(".") or item.name == "Thumbs.db":
+                    continue
+                rel_posix = item.relative_to(base).as_posix()
+                item_subpath = f"{root_key}/{rel_posix}"
+                if query in item.name.lower():
+                    folder_rel = "/".join(rel_posix.split("/")[:-1])
+                    display_folder = f"{info['display_name']} / {folder_rel}" if folder_rel else info['display_name']
+                    if item.is_dir():
+                        audio_count = 0
+                        try:
+                            audio_count = len([f for f in item.iterdir() if f.is_file() and f.suffix.lower() in config.USB_AUDIO_EXTENSIONS])
+                        except Exception:
+                            pass
+                        folders.append({
+                            "name": item.name,
+                            "subpath": item_subpath,
+                            "folder_path": display_folder,
+                            "audio_count": audio_count
+                        })
+                    elif item.is_file() and item.suffix.lower() in config.USB_AUDIO_EXTENSIONS:
+                        stat = item.stat()
+                        files.append({
+                            "filename": item.name,
+                            "subpath": item_subpath,
+                            "folder_path": display_folder,
+                            "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                            "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                        })
+                if len(folders) + len(files) >= 150:
+                    break
+        except Exception as e:
+            print(f"[Search Error in {root_key}]: {e}")
+
+    return {
+        "query": q,
+        "folders": folders,
+        "files": files,
+        "total_items": len(folders) + len(files)
+    }
+
+@app.get("/api/rav-tzvi/stream")
+def stream_rav_tzvi(file: str = Query(..., description="Relative file subpath"), token: str = Query(None), request: Request = None):
+    """
+    Protected streaming of Rav Tzvi shiurim directly from disk with Range Header support.
+    Disallows external downloads and supports responsive web playback.
+    """
+    if not token or token not in STREAMING_TOKENS:
+        raise HTTPException(status_code=403, detail="Invalid or missing stream token")
+        
+    token_data = STREAMING_TOKENS[token]
+    if token_data["file"] != file or token_data["expires"] < datetime.now():
+        STREAMING_TOKENS.pop(token, None)
+        raise HTTPException(status_code=403, detail="Token expired or mismatched")
+        
+    dest = request.headers.get("Sec-Fetch-Dest", "")
+    if dest and dest not in ("audio", "empty", "document"):
+        raise HTTPException(status_code=403, detail="Direct downloading is blocked")
+
+    file_path, _, _ = resolve_rav_tzvi_path(file)
+    if not file_path or not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Audio file not found")
+
+    file_size = file_path.stat().st_size
+    mime_type, _ = mimetypes.guess_type(str(file_path))
+    mime_type = mime_type or "audio/mpeg"
+
+    range_header = request.headers.get("range") if request else None
+
+    if not range_header:
+        response = FileResponse(path=file_path, media_type=mime_type, filename=file_path.name)
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        return response
+
+    try:
+        byte_range = range_header.replace("bytes=", "").split("-")
+        start = int(byte_range[0])
+        end = int(byte_range[1]) if byte_range[1] else file_size - 1
+        end = min(end, file_size - 1)
+        length = end - start + 1
+
+        with open(file_path, "rb") as f:
+            f.seek(start)
+            data = f.read(length)
+
+        headers = {
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(length),
+            "Content-Type": mime_type,
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"
+        }
+        return Response(content=data, status_code=206, headers=headers)
+    except Exception:
+        response = FileResponse(path=file_path, media_type=mime_type, filename=file_path.name)
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        return response
+
+@app.get("/rav-tzvi")
+def rav_tzvi_page():
+    """Serves the Explorer-like Protected Streamer for Rav Tzvi Kostiner's Shiurim."""
+    for candidate in [STATIC_DIR / "rav_tzvi.html", TEMPLATES_DIR / "rav_tzvi.html"]:
+        if candidate.exists():
+            return FileResponse(str(candidate))
+    return HTMLResponse("<h1>Rav Tzvi Library Loading... (rav_tzvi.html not found)</h1>", status_code=404)
