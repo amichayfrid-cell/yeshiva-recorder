@@ -24,6 +24,7 @@ const searchInput = document.getElementById('searchInput');
 let searchDebounceTimer = null;
 let isSearching = false;
 let currentBreadcrumbs = [];
+let currentNetworkStatus = null;
 
 // ==========================================
 // Folder Navigation & API Fetch
@@ -47,11 +48,27 @@ async function loadFolder(subpath = '', pushHistory = true) {
     loadedFolders = data.folders || [];
     loadedFiles = data.files || [];
     currentBreadcrumbs = data.breadcrumbs || [];
+    currentNetworkStatus = data.network_status || null;
 
+    updateNetworkBanner(currentNetworkStatus);
     renderBreadcrumbs(currentBreadcrumbs);
     renderExplorer(loadedFolders, loadedFiles);
   } catch (err) {
     console.error('Error loading folder:', err);
+  }
+}
+
+function updateNetworkBanner(status) {
+  const alertEl = document.getElementById('networkAlert');
+  if (!alertEl) return;
+  if (status && status.mounted === false) {
+    alertEl.style.display = 'flex';
+    const pathEl = document.getElementById('networkMountPath');
+    if (pathEl && status.mount_point) {
+      pathEl.textContent = status.mount_point;
+    }
+  } else {
+    alertEl.style.display = 'none';
   }
 }
 
@@ -175,6 +192,19 @@ function renderExplorer(folders, files, isSearchResult = false) {
   // Handle empty folder
   if (folders.length === 0 && files.length === 0) {
     emptyView.style.display = 'block';
+    const emptyIcon = document.getElementById('emptyIcon');
+    const emptyTitle = document.getElementById('emptyTitle');
+    const emptySubtext = document.getElementById('emptySubtext');
+
+    if (currentNetworkStatus && currentNetworkStatus.mounted === false) {
+      if (emptyIcon) emptyIcon.textContent = '🔌';
+      if (emptyTitle) emptyTitle.textContent = 'שרת הקבצים של הישיבה אינו מעוגן';
+      if (emptySubtext) emptySubtext.textContent = 'לא ניתן להציג את שיעורי הרב צבי כיוון ששיתוף הרשת אינו מחובר כרגע. יש לבצע עגינה (sudo mount -a) בשרת הישיבה.';
+    } else {
+      if (emptyIcon) emptyIcon.textContent = '📂';
+      if (emptyTitle) emptyTitle.textContent = isSearchResult ? 'לא נמצאו שיעורים התואמים לחיפוש' : 'אין פריטים להצגה בתיקייה זו';
+      if (emptySubtext) emptySubtext.textContent = '';
+    }
   } else {
     emptyView.style.display = 'none';
   }

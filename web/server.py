@@ -35,7 +35,7 @@ def is_authenticated(request: Request) -> bool:
     return request.cookies.get(COOKIE_NAME) == ADMIN_PASSWORD
 
 def get_sorting_dir() -> Path:
-    if config.NETWORK_TARGET_DIR.exists():
+    if config.is_network_share_mounted() and config.NETWORK_TARGET_DIR.exists():
         return config.NETWORK_TARGET_DIR
     return config.LOCAL_STAGING_DIR
 
@@ -513,56 +513,94 @@ def get_stream_token(file: str = Query(..., description="Relative file subpath")
         
     return {"token": token}
 
+def is_rav_tzvi_name(name: str) -> bool:
+    """
+    Safely determines if a directory name refers to Rav Tzvi Kostiner.
+    Matches: 'הרב צבי קוסטינר', 'הרב צבי', 'מו"ר הרב צבי', 'קוסטינר', 'שיעורי הרב צבי', etc.
+    Strictly excludes: 'הרב צבי יהודה' or other rabbis.
+    """
+    clean = name.strip()
+    if "יהודה" in clean:
+        return False
+    if "קוסטינר" in clean:
+        return True
+    if "צבי" in clean and any(w in clean for w in ["הרב", "מור", 'מו"ר', "רב"]):
+        return True
+    return False
+
 def find_rav_tzvi_in_folder(folder: Path) -> Optional[Path]:
     """Finds Rav Tzvi Kostiner's folder inside a given semester or year folder."""
+    if not folder.exists() or not folder.is_dir():
+        return None
+
     # Exclude non-semester collections
     if "רבנים שונים" in folder.name or "הגברת החירות" in folder.name:
         return None
+
+    # 0. Check if folder itself IS Rav Tzvi's folder
+    if is_rav_tzvi_name(folder.name):
+        return folder
 
     # 1. Exact canonical path: folder / "רבני הישיבה" / "הרב צבי קוסטינר"
     cand = folder / "רבני הישיבה" / "הרב צבי קוסטינר"
     if cand.exists() and cand.is_dir():
         return cand
-        
-    # 2. Check inside "רבני הישיבה" for Kostiner specifically (prevent 'הרב צבי יהודה')
-    cand2 = folder / "רבני הישיבה"
-    if cand2.exists() and cand2.is_dir():
-        for sub in cand2.iterdir():
-            if sub.is_dir() and "קוסטינר" in sub.name and "יהודה" not in sub.name:
-                return sub
 
-    # 3. Direct folder search for Kostiner specifically
+    # 2. Check inside any rabbis subfolder ("רבני הישיבה", "רבנים", etc.)
     try:
         for sub in folder.iterdir():
-            if sub.is_dir() and "קוסטינר" in sub.name and "יהודה" not in sub.name:
+            if sub.is_dir() and ("רבני" in sub.name or "רבנים" in sub.name):
+                exact = sub / "הרב צבי קוסטינר"
+                if exact.exists() and exact.is_dir():
+                    return exact
+                for rabbi in sub.iterdir():
+                    if rabbi.is_dir() and is_rav_tzvi_name(rabbi.name):
+                        return rabbi
+    except Exception:
+        pass
+
+    # 3. Direct folder search for Rav Tzvi inside folder
+    try:
+        for sub in folder.iterdir():
+            if sub.is_dir() and is_rav_tzvi_name(sub.name):
                 return sub
     except Exception:
         pass
-            
+
     return None
 
 def find_rav_tzvi_archive(base_mount: Path) -> Optional[Path]:
     """Finds Rav Tzvi's archive folder on the network share."""
-    archive_base = base_mount / "ארכיון שיעורי הישיבה"
-    if not archive_base.exists():
+    archive_candidates = [
+        base_mount / "ארכיון שיעורי הישיבה",
+        base_mount / "ארכיון",
+        base_mount / "ארכיון שיעורים"
+    ]
+    archive_base = None
+    for ac in archive_candidates:
+        if ac.exists() and ac.is_dir():
+            archive_base = ac
+            break
+
+    if not archive_base:
         return None
-        
-    p1 = archive_base / "רבני הישיבה" / "הרב צבי קוסטינר - ניהול בלבד"
-    if p1.exists() and p1.is_dir():
-        return p1
-        
-    p2 = archive_base / "רבני הישיבה" / "הרב צבי קוסטינר"
-    if p2.exists() and p2.is_dir():
-        return p2
-        
-    try:
-        rabbi_dir = archive_base / "רבני הישיבה"
-        if rabbi_dir.exists():
-            for d in rabbi_dir.iterdir():
-                if d.is_dir() and "קוסטינר" in d.name and "יהודה" not in d.name:
+
+    # 1. Check under "רבני הישיבה" or "רבנים"
+    for r_name in ["רבני הישיבה", "רבנים"]:
+        r_dir = archive_base / r_name
+        if r_dir.exists() and r_dir.is_dir():
+            for d in r_dir.iterdir():
+                if d.is_dir() and is_rav_tzvi_name(d.name):
                     return d
+
+    # 2. Check directly under archive_base
+    try:
+        for d in archive_base.iterdir():
+            if d.is_dir() and is_rav_tzvi_name(d.name):
+                return d
     except Exception:
         pass
+
     return None
 
 _RAV_TZVI_SOURCES_CACHE = None
@@ -581,10 +619,13 @@ def get_rav_tzvi_sources() -> Dict[str, Dict[str, Any]]:
         return _RAV_TZVI_SOURCES_CACHE
 
     sources = {}
-    base_mount = config.NETWORK_MOUNT_POINT if config.NETWORK_MOUNT_POINT.exists() else config.LOCAL_STAGING_DIR
-    
+    is_mounted = config.is_network_share_mounted()
+    base_mount = config.NETWORK_MOUNT_POINT if is_mounted else config.LOCAL_STAGING_DIR
+    print(f"[Rav Tzvi] Scanning sources in base_mount: {base_mount} (is_network_share_mounted={is_mounted})")
+
     EXCLUDED = {
         "ארכיון שיעורי הישיבה", 
+        "ארכיון",
         "שיעורים למיון", 
         "אחראי שמע", 
         "רבנים שונים",
@@ -594,32 +635,44 @@ def get_rav_tzvi_sources() -> Dict[str, Dict[str, Any]]:
         "System Volume Information"
     }
     if base_mount.exists() and base_mount.is_dir():
-        for item in sorted(base_mount.iterdir(), key=lambda x: x.name, reverse=True):
-            if item.is_dir() and not item.name.startswith(".") and item.name not in EXCLUDED and "רבנים שונים" not in item.name:
-                rt_folder = find_rav_tzvi_in_folder(item)
-                if rt_folder:
-                    slug = re.sub(r'[^a-zA-Z0-9_\u0590-\u05FF]', '_', item.name).strip("_")
-                    key = f"current_{slug}"
-                    sources[key] = {
-                        "display_name": f"שיעורים שוטפים ({item.name})",
-                        "path": rt_folder
-                    }
-                    
+        # Check if base_mount itself contains Rav Tzvi directly
+        direct_rt = find_rav_tzvi_in_folder(base_mount)
+        if direct_rt and direct_rt != base_mount:
+            sources["current_direct"] = {
+                "display_name": "שיעורים שוטפים (ישיר)",
+                "path": direct_rt
+            }
+
+        try:
+            for item in sorted(base_mount.iterdir(), key=lambda x: x.name, reverse=True):
+                if item.is_dir() and not item.name.startswith(".") and item.name not in EXCLUDED and "רבנים שונים" not in item.name:
+                    rt_folder = find_rav_tzvi_in_folder(item)
+                    if rt_folder:
+                        slug = re.sub(r'[^a-zA-Z0-9_\u0590-\u05FF]', '_', item.name).strip("_")
+                        key = f"current_{slug}"
+                        sources[key] = {
+                            "display_name": f"שיעורים שוטפים ({item.name})",
+                            "path": rt_folder
+                        }
+        except Exception as e:
+            print(f"[Rav Tzvi] Error scanning base_mount: {e}")
+
     arch = find_rav_tzvi_archive(base_mount)
     if arch:
         sources["archive"] = {
             "display_name": "ארכיון שיעורי הרב צבי",
             "path": arch
         }
-        
+
     if not sources:
         local_dir = config.RAV_TZVI_DIR
         local_dir.mkdir(parents=True, exist_ok=True)
         sources["local"] = {
-            "display_name": "שיעורי הרב צבי",
+            "display_name": "שיעורי הרב צבי (מקומי)",
             "path": local_dir
         }
-        
+
+    print(f"[Rav Tzvi] Discovered library sources: {list(sources.keys())}")
     _RAV_TZVI_SOURCES_CACHE = sources
     _RAV_TZVI_CACHE_TIME = now
     return sources
@@ -632,35 +685,41 @@ def resolve_rav_tzvi_path(subpath: str = "") -> Tuple[Optional[Path], Optional[s
     """
     if not subpath or subpath.strip() == "" or subpath == ".":
         return None, None, None
-        
+
     clean_sub = os.path.normpath(subpath).replace("\\", "/").strip("/")
     parts = clean_sub.split("/")
     root_key = parts[0]
     rel_sub = "/".join(parts[1:])
-    
+
     sources = get_rav_tzvi_sources()
     if root_key not in sources:
         raise HTTPException(status_code=404, detail="Library section not found")
-        
+
     base = sources[root_key]["path"].resolve()
     if not rel_sub:
         return base, root_key, base
-        
+
     target = (base / rel_sub).resolve()
     if not str(target).startswith(str(base)):
         raise HTTPException(status_code=400, detail="Invalid path traversal")
-        
+
     return target, root_key, base
 
 @app.get("/api/rav-tzvi/browse")
 def browse_rav_tzvi(subpath: str = Query("", description="Relative folder subpath")):
     """
     Browses Rav Tzvi Kostiner's protected library in an Explorer-like structure.
-    Returns breadcrumbs, folders, and playable audio files.
+    Returns breadcrumbs, folders, playable audio files, and network connection status.
     """
     sources = get_rav_tzvi_sources()
     target_path, root_key, base_path = resolve_rav_tzvi_path(subpath)
-    
+    is_mounted = config.is_network_share_mounted()
+    network_status = {
+        "mounted": is_mounted,
+        "mount_point": str(config.NETWORK_MOUNT_POINT),
+        "sources_count": len([k for k in sources.keys() if k != "local"])
+    }
+
     # 1. Top-Level Root View (Sections: Current Semester + Archive)
     if target_path is None:
         folders = []
@@ -685,7 +744,8 @@ def browse_rav_tzvi(subpath: str = Query("", description="Relative folder subpat
             "breadcrumbs": [{"name": "שיעורי הרב צבי", "subpath": ""}],
             "folders": folders,
             "files": [],
-            "total_items": len(folders)
+            "total_items": len(folders),
+            "network_status": network_status
         }
 
     # 2. Inside a section or folder
@@ -748,7 +808,8 @@ def browse_rav_tzvi(subpath: str = Query("", description="Relative folder subpat
         "breadcrumbs": breadcrumbs,
         "folders": folders,
         "files": files,
-        "total_items": len(folders) + len(files)
+        "total_items": len(folders) + len(files),
+        "network_status": network_status
     }
 
 @app.get("/api/rav-tzvi/search")

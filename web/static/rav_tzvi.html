@@ -35,6 +35,18 @@
         <span class="search-icon">🔍</span>
       </div>
     </div>
+
+    <!-- Network Mount Disconnected Warning Banner -->
+    <div class="network-alert-banner" id="networkAlert" style="display: none;">
+      <div class="network-alert-icon">⚠️</div>
+      <div class="network-alert-body">
+        <div class="network-alert-title">שרת הקבצים של הישיבה אינו מעוגן כרגע</div>
+        <div class="network-alert-text">
+          תיקיית השיתוף (<code id="networkMountPath">/mnt/yeshiva_share</code>) אינה מחוברת.
+          כדי להציג את שיעורי הישיבה, יש לבצע עגינה בשרת באמצעות הפקודה: <code>sudo mount -a</code>.
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Main Explorer View -->
@@ -64,8 +76,9 @@
 
     <!-- Empty State View -->
     <div class="empty-view" id="emptyView" style="display: none;">
-      <div style="font-size: 40px; margin-bottom: 8px;">📂</div>
-      <h3 style="font-size: 16px; margin: 0;">אין פריטים להצגה בתיקייה זו</h3>
+      <div style="font-size: 44px; margin-bottom: 8px;" id="emptyIcon">📂</div>
+      <h3 style="font-size: 17px; margin: 0 0 6px 0; font-weight: 700;" id="emptyTitle">אין פריטים להצגה בתיקייה זו</h3>
+      <div style="font-size: 13px; color: var(--text-dim); max-width: 460px; margin: 0 auto; line-height: 1.5;" id="emptySubtext"></div>
     </div>
 
   </main>

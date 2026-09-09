@@ -15,9 +15,18 @@ MAX_HISTORY_ENTRIES = 500  # Maximum records in history
 NETWORK_MOUNT_POINT = Path("/mnt/yeshiva_share")
 NETWORK_TARGET_DIR = NETWORK_MOUNT_POINT / "שיעורים למיון"
 
+def is_network_share_mounted() -> bool:
+    """Checks if NETWORK_MOUNT_POINT exists and actually contains files/folders (not an unmounted empty dir)."""
+    if not NETWORK_MOUNT_POINT.exists() or not NETWORK_MOUNT_POINT.is_dir():
+        return False
+    try:
+        return any(item for item in NETWORK_MOUNT_POINT.iterdir() if not item.name.startswith("."))
+    except Exception:
+        return False
+
 # Target Directory Resolver (uses Network if mounted, falls back to Local Staging)
 def get_final_target_dir() -> Path:
-    if NETWORK_TARGET_DIR.exists() and NETWORK_TARGET_DIR.is_dir():
+    if is_network_share_mounted() and NETWORK_TARGET_DIR.exists() and NETWORK_TARGET_DIR.is_dir():
         return NETWORK_TARGET_DIR
     return LOCAL_STAGING_DIR
 

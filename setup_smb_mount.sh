@@ -61,12 +61,13 @@ if [ ! -d "$TARGET_DIR" ]; then
     mkdir -p "$TARGET_DIR"
 fi
 
-# 7. הגדרה לעגינה קבועה ב-fstab
+# 7. הגדרה לעגינה קבועה ב-fstab (ברווחים יש להשתמש ב-\040)
 echo "[*] מגדיר עגינה אוטומטית בעליית השרת ב-/etc/fstab..."
 # הסרת הגדרות ישנות אם קיימות
 sed -i "\|$MOUNT_POINT|d" /etc/fstab
 
-FSTAB_ENTRY="$SHARE_PATH $MOUNT_POINT cifs credentials=$CRED_FILE,iocharset=utf8,file_mode=0777,dir_mode=0777,vers=3.0,noperm,_netdev 0 0"
+FSTAB_SHARE_PATH=$(echo "$SHARE_PATH" | sed 's/ /\\040/g')
+FSTAB_ENTRY="$FSTAB_SHARE_PATH $MOUNT_POINT cifs credentials=$CRED_FILE,iocharset=utf8,file_mode=0777,dir_mode=0777,vers=3.0,noperm,_netdev 0 0"
 echo "$FSTAB_ENTRY" >> /etc/fstab
 
 echo ""

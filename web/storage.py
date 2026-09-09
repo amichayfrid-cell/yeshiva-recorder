@@ -95,7 +95,7 @@ def list_direct_subfolders(target_path: Optional[str] = None) -> Dict[str, Any]:
     Blazing fast subfolder listing using os.scandir and in-memory cache.
     Ignores non-directory files entirely to eliminate network overhead.
     """
-    root_str = str(config.NETWORK_MOUNT_POINT if config.NETWORK_MOUNT_POINT.exists() else config.LOCAL_STAGING_DIR)
+    root_str = str(config.NETWORK_MOUNT_POINT if config.is_network_share_mounted() else config.LOCAL_STAGING_DIR)
 
     if not target_path or target_path == "":
         current_dir_str = root_str
