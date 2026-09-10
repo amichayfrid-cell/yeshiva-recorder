@@ -530,17 +530,16 @@ def get_stream_token(file: str = Query(..., description="Relative file subpath")
 
 def is_rav_tzvi_name(name: str) -> bool:
     """
-    Safely determines if a directory name refers to Rav Tzvi Kostiner.
-    Matches: 'הרב צבי קוסטינר', 'הרב צבי', 'מו"ר הרב צבי', 'קוסטינר', 'שיעורי הרב צבי', etc.
-    Strictly excludes: 'הרב צבי יהודה' or other rabbis.
+    Safely determines if a directory name refers specifically to Rav Tzvi Kostiner.
+    Matches: 'הרב צבי קוסטינר', 'הרב צבי', 'מו"ר הרב צבי', 'שיעורי הרב צבי', etc.
+    Strictly excludes: 'הרב אריה קוסטינר', 'הרב צבי יהודה' or other rabbis.
     """
     clean = name.strip()
-    if "יהודה" in clean:
+    if "יהודה" in clean or "אריה" in clean:
         return False
-    if "קוסטינר" in clean:
-        return True
-    if "צבי" in clean and any(w in clean for w in ["הרב", "מור", 'מו"ר', "רב"]):
-        return True
+    if "צבי" in clean:
+        if "קוסטינר" in clean or any(w in clean for w in ["הרב", "מור", 'מו"ר', "שיעורי"]):
+            return True
     return False
 
 def find_rav_tzvi_in_folder(folder: Path) -> Optional[Path]:
@@ -650,14 +649,6 @@ def get_rav_tzvi_sources() -> Dict[str, Dict[str, Any]]:
         "System Volume Information"
     }
     if base_mount.exists() and base_mount.is_dir():
-        # Check if base_mount itself contains Rav Tzvi directly
-        direct_rt = find_rav_tzvi_in_folder(base_mount)
-        if direct_rt and direct_rt != base_mount:
-            sources["current_direct"] = {
-                "display_name": "שיעורים שוטפים (ישיר)",
-                "path": direct_rt
-            }
-
         try:
             for item in sorted(base_mount.iterdir(), key=lambda x: x.name, reverse=True):
                 if item.is_dir() and not item.name.startswith(".") and item.name not in EXCLUDED and "רבנים שונים" not in item.name:
