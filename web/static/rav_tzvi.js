@@ -244,7 +244,7 @@ function handleSearch() {
 // Audio Player Controls & Logic
 // ==========================================
 async function playAudio(fileSubpath, filename) {
-  if (currentPlayingSubpath === fileSubpath) {
+  if (currentPlayingSubpath === fileSubpath && !audio.error) {
     togglePlayPause();
     return;
   }
@@ -373,6 +373,32 @@ audio.addEventListener('ended', () => {
   playIcon.textContent = '▶';
   progressSlider.value = 0;
   highlightPlayingFile();
+});
+
+// Automatic Recovery on stream interrupt or token expiry
+let isRecovering = false;
+audio.addEventListener('error', async () => {
+  console.warn("Audio playback error encountered, attempting auto-recovery...", audio.error);
+  if (isRecovering || !currentPlayingSubpath) return;
+  isRecovering = true;
+  const savedTime = audio.currentTime || 0;
+  try {
+    const tokenRes = await fetch(`/api/rav-tzvi/token?file=${encodeURIComponent(currentPlayingSubpath)}`, { method: 'POST' });
+    if (tokenRes.ok) {
+      const tokenData = await tokenRes.json();
+      audio.src = `/api/rav-tzvi/stream?file=${encodeURIComponent(currentPlayingSubpath)}&token=${tokenData.token}`;
+      audio.addEventListener('canplay', function onCanPlay() {
+        audio.removeEventListener('canplay', onCanPlay);
+        if (savedTime > 0) audio.currentTime = savedTime;
+        audio.play().catch(() => {});
+      });
+      audio.load();
+    }
+  } catch (err) {
+    console.error("Audio recovery failed:", err);
+  } finally {
+    setTimeout(() => { isRecovering = false; }, 1500);
+  }
 });
 
 // Format seconds to mm:ss or hh:mm:ss

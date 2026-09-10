@@ -502,12 +502,12 @@ def get_stream_token(file: str = Query(..., description="Relative file subpath")
     import secrets
     from datetime import datetime, timedelta
     token = secrets.token_urlsafe(16)
-    # Token valid for 30 seconds
-    STREAMING_TOKENS[token] = {"file": file, "expires": datetime.now() + timedelta(seconds=30)}
+    # Token valid for 8 hours (prevents drops during long lessons and pauses)
+    STREAMING_TOKENS[token] = {"file": file, "expires": datetime.now() + timedelta(hours=8)}
     
-    # Cleanup old tokens
+    # Cleanup expired tokens older than 8 hours
     now = datetime.now()
-    expired = [t for t, data in STREAMING_TOKENS.items() if data["expires"] < now]
+    expired = [t for t, data in list(STREAMING_TOKENS.items()) if data["expires"] < now]
     for t in expired:
         STREAMING_TOKENS.pop(t, None)
         
@@ -875,7 +875,7 @@ def search_rav_tzvi(q: str = Query("", description="Search query across all fold
 def stream_rav_tzvi(file: str = Query(..., description="Relative file subpath"), token: str = Query(None), request: Request = None):
     """
     Protected streaming of Rav Tzvi shiurim directly from disk with Range Header support.
-    Disallows external downloads and supports responsive web playback.
+    Disallows external downloads and supports responsive, uninterrupted web playback.
     """
     if not token or token not in STREAMING_TOKENS:
         raise HTTPException(status_code=403, detail="Invalid or missing stream token")
@@ -885,6 +885,9 @@ def stream_rav_tzvi(file: str = Query(..., description="Relative file subpath"),
         STREAMING_TOKENS.pop(token, None)
         raise HTTPException(status_code=403, detail="Token expired or mismatched")
         
+    # Slide token expiration forward on active listening by 8 hours
+    token_data["expires"] = datetime.now() + timedelta(hours=8)
+
     dest = request.headers.get("Sec-Fetch-Dest", "")
     if dest and dest not in ("audio", "empty", "document"):
         raise HTTPException(status_code=403, detail="Direct downloading is blocked")
@@ -899,9 +902,8 @@ def stream_rav_tzvi(file: str = Query(..., description="Relative file subpath"),
 
     range_header = request.headers.get("range") if request else None
 
-    # Default chunk size for instant audio start (1 MB = ~65 seconds of 128kbps audio)
-    # Allows browser to start playback in < 20ms over the network mount instead of loading 50MB
-    CHUNK_SIZE = 1024 * 1024  # 1 MB
+    # 2MB chunk gives instant audio start (<20ms) and buffers ~2 minutes of audio per request
+    CHUNK_SIZE = 2 * 1024 * 1024  # 2 MB
 
     if not range_header:
         start = 0
@@ -914,7 +916,7 @@ def stream_rav_tzvi(file: str = Query(..., description="Relative file subpath"),
             "Accept-Ranges": "bytes",
             "Content-Length": str(length),
             "Content-Type": mime_type,
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"
+            "Cache-Control": "private, max-age=86400"
         }
         return Response(content=data, status_code=206, headers=headers)
 
@@ -922,16 +924,16 @@ def stream_rav_tzvi(file: str = Query(..., description="Relative file subpath"),
         byte_range = range_header.replace("bytes=", "").split("-")
         start = int(byte_range[0])
         
-        # If browser requested open-ended range (e.g. bytes=0-), cap at 1MB
+        # If browser requested open-ended range (e.g. bytes=0-), cap at CHUNK_SIZE
         if byte_range[1] and byte_range[1].strip():
             end = int(byte_range[1])
         else:
             end = start + CHUNK_SIZE - 1
 
         end = min(end, file_size - 1)
-        # Cap range to 2MB max per request so reads over SMB are instantaneous
-        if end - start + 1 > 2 * 1024 * 1024:
-            end = start + 2 * 1024 * 1024 - 1
+        # Cap range to 4MB max per request so reads over SMB are swift while buffering plenty ahead
+        if end - start + 1 > 4 * 1024 * 1024:
+            end = start + 4 * 1024 * 1024 - 1
             end = min(end, file_size - 1)
 
         length = end - start + 1
@@ -945,13 +947,13 @@ def stream_rav_tzvi(file: str = Query(..., description="Relative file subpath"),
             "Accept-Ranges": "bytes",
             "Content-Length": str(length),
             "Content-Type": mime_type,
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"
+            "Cache-Control": "private, max-age=86400"
         }
         return Response(content=data, status_code=206, headers=headers)
     except Exception as e:
         print(f"[Streaming Error]: {e}")
         response = FileResponse(path=file_path, media_type=mime_type, filename=file_path.name)
-        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Cache-Control"] = "private, max-age=86400"
         return response
 
 @app.get("/rav-tzvi")
