@@ -34,8 +34,23 @@ COOKIE_NAME = "yeshiva_session"
 def is_authenticated(request: Request) -> bool:
     return request.cookies.get(COOKIE_NAME) == ADMIN_PASSWORD
 
+def is_network_share_mounted() -> bool:
+    """Checks if network share is mounted and non-empty (resilient against older config.py versions)."""
+    if hasattr(config, "is_network_share_mounted"):
+        try:
+            return config.is_network_share_mounted()
+        except Exception:
+            pass
+    mount_point = getattr(config, "NETWORK_MOUNT_POINT", Path("/mnt/yeshiva_share"))
+    if not mount_point.exists() or not mount_point.is_dir():
+        return False
+    try:
+        return any(item for item in mount_point.iterdir() if not item.name.startswith("."))
+    except Exception:
+        return False
+
 def get_sorting_dir() -> Path:
-    if config.is_network_share_mounted() and config.NETWORK_TARGET_DIR.exists():
+    if is_network_share_mounted() and config.NETWORK_TARGET_DIR.exists():
         return config.NETWORK_TARGET_DIR
     return config.LOCAL_STAGING_DIR
 
@@ -619,7 +634,7 @@ def get_rav_tzvi_sources() -> Dict[str, Dict[str, Any]]:
         return _RAV_TZVI_SOURCES_CACHE
 
     sources = {}
-    is_mounted = config.is_network_share_mounted()
+    is_mounted = is_network_share_mounted()
     base_mount = config.NETWORK_MOUNT_POINT if is_mounted else config.LOCAL_STAGING_DIR
     print(f"[Rav Tzvi] Scanning sources in base_mount: {base_mount} (is_network_share_mounted={is_mounted})")
 
@@ -713,7 +728,7 @@ def browse_rav_tzvi(subpath: str = Query("", description="Relative folder subpat
     """
     sources = get_rav_tzvi_sources()
     target_path, root_key, base_path = resolve_rav_tzvi_path(subpath)
-    is_mounted = config.is_network_share_mounted()
+    is_mounted = is_network_share_mounted()
     network_status = {
         "mounted": is_mounted,
         "mount_point": str(config.NETWORK_MOUNT_POINT),
