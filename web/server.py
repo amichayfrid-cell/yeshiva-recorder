@@ -86,10 +86,8 @@ def prune_transcode_cache(max_size_bytes: int = 2 * 1024 * 1024 * 1024):
 def get_streamable_audio_path(file_path: Path) -> Tuple[Path, str]:
     """
     Ensures the audio file is in a web-compatible, high-performance streaming format.
-    - MP3, M4A, AAC, OGG: Streamed directly in native format.
+    - MP3, WAV, M4A, AAC, OGG: Streamed directly in native format with zero lag.
     - WMA: Modern web browsers cannot decode WMA. Automatically transcodes to cached MP3 via FFmpeg.
-    - WAV: Huge uncompressed PCM files cause massive network load and seeking glitches in browsers.
-      Automatically transcodes to optimized cached MP3 via FFmpeg, with graceful fallback to WAV PCM.
     Returns: (resolved_path, mime_type)
     """
     ext = file_path.suffix.lower()
@@ -97,6 +95,8 @@ def get_streamable_audio_path(file_path: Path) -> Tuple[Path, str]:
     # Direct streaming for formats natively supported across web browsers
     if ext == ".mp3":
         return file_path, "audio/mpeg"
+    elif ext == ".wav":
+        return file_path, "audio/wav"
     elif ext in (".m4a", ".mp4"):
         return file_path, "audio/mp4"
     elif ext == ".aac":
@@ -104,8 +104,8 @@ def get_streamable_audio_path(file_path: Path) -> Tuple[Path, str]:
     elif ext == ".ogg":
         return file_path, "audio/ogg"
 
-    # WMA and WAV: Transcode to seekable cached MP3 via FFmpeg
-    if ext in (".wma", ".wav"):
+    # WMA: Modern browsers do not support WMA. Transcode to seekable cached MP3 via FFmpeg
+    if ext == ".wma":
         ffmpeg_bin = shutil.which("ffmpeg")
         if ffmpeg_bin:
             try:
@@ -134,10 +134,14 @@ def get_streamable_audio_path(file_path: Path) -> Tuple[Path, str]:
                         cmd = [
                             ffmpeg_bin,
                             "-y",
+                            "-threads", "0",
                             "-i", str(file_path),
                             "-vn",
                             "-acodec", "libmp3lame",
-                            "-b:a", "128k",
+                            "-preset", "ultrafast",
+                            "-compression_level", "0",
+                            "-ac", "1",
+                            "-b:a", "96k",
                             "-ar", "44100",
                             str(temp_mp3)
                         ]
@@ -161,10 +165,7 @@ def get_streamable_audio_path(file_path: Path) -> Tuple[Path, str]:
                 print(f"[Transcode Error] {file_path.name}: {e}")
 
         # Fallback if FFmpeg is not installed or transcoding failed
-        if ext == ".wav":
-            return file_path, "audio/wav"
-        elif ext == ".wma":
-            return file_path, "audio/x-ms-wma"
+        return file_path, "audio/x-ms-wma"
 
     mime, _ = mimetypes.guess_type(str(file_path))
     return file_path, mime or "audio/mpeg"
@@ -199,11 +200,12 @@ def stream_audio_range(file_path: Path, range_header: Optional[str] = None):
                 yield data
 
     headers = {
-        "Content-Range": f"bytes {start}-{end}/{file_size}",
         "Accept-Ranges": "bytes",
         "Content-Length": str(length),
         "Content-Type": content_type,
     }
+    if range_header:
+        headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
     return StreamingResponse(iterfile(), status_code=206 if range_header else 200, headers=headers)
 
 # --- Routes ---
@@ -1135,8 +1137,9 @@ def stream_rav_tzvi(file: str = Query(..., description="Relative file subpath"),
 
     range_header = request.headers.get("range") if request else None
 
-    # 2MB chunk gives instant audio start (<20ms) and buffers ~2 minutes of audio per request
-    CHUNK_SIZE = 2 * 1024 * 1024  # 2 MB
+    # For MP3: 2MB buffers ~2 minutes. For WAV: 4MB buffers ~25-50 seconds instantly (<25ms over network)
+    CHUNK_SIZE = 4 * 1024 * 1024 if mime_type == "audio/wav" else 2 * 1024 * 1024
+    MAX_CHUNK = 8 * 1024 * 1024 if mime_type == "audio/wav" else 4 * 1024 * 1024
 
     if not range_header:
         def iter_full():
@@ -1162,9 +1165,9 @@ def stream_rav_tzvi(file: str = Query(..., description="Relative file subpath"),
             end = start + CHUNK_SIZE - 1
 
         end = min(end, file_size - 1)
-        # Cap range to 4MB max per request so reads over SMB are swift while buffering plenty ahead
-        if end - start + 1 > 4 * 1024 * 1024:
-            end = start + 4 * 1024 * 1024 - 1
+        # Cap range to MAX_CHUNK max per request so reads over SMB are swift while buffering plenty ahead
+        if end - start + 1 > MAX_CHUNK:
+            end = start + MAX_CHUNK - 1
             end = min(end, file_size - 1)
 
         length = end - start + 1

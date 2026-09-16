@@ -303,7 +303,8 @@ async function playAudio(fileSubpath, filename) {
   }
 
   currentPlayingSubpath = fileSubpath;
-  playerTrackName.textContent = 'טוען... ' + filename.replace(/\.[^/.]+$/, '');
+  const isWma = filename.toLowerCase().endsWith('.wma');
+  playerTrackName.textContent = (isWma ? 'ממיר WMA... ' : 'טוען... ') + filename.replace(/\.[^/.]+$/, '');
   playerTrackName.title = filename;
   playIcon.textContent = '⏳';
 
