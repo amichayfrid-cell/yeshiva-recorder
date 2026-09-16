@@ -151,7 +151,7 @@ function togglePlay(index) {
     }
 
     if (audio.paused) {
-        audio.play();
+        audio.play().catch(e => console.warn("Play interrupted:", e));
         btn.innerText = "⏸";
         currentAudio = audio;
         currentPlayBtn = btn;

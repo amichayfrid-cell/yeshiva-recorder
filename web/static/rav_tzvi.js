@@ -316,7 +316,13 @@ async function playAudio(fileSubpath, filename) {
     audio.src = streamUrl;
     audio.playbackRate = parseFloat(speedSelect.value) || 1.0;
     playerTrackName.textContent = filename.replace(/\.[^/.]+$/, '');
-    audio.play();
+    try {
+      await audio.play();
+    } catch (playErr) {
+      if (playErr.name !== 'AbortError') {
+        console.warn("Audio play warning:", playErr);
+      }
+    }
     
     highlightPlayingFile();
   } catch (e) {

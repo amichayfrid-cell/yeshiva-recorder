@@ -2,6 +2,9 @@ import os
 import re
 import time
 import shutil
+import hashlib
+import threading
+import subprocess
 import mimetypes
 from pathlib import Path
 import secrets
@@ -54,10 +57,121 @@ def get_sorting_dir() -> Path:
         return config.NETWORK_TARGET_DIR
     return config.LOCAL_STAGING_DIR
 
+TRANSCODED_CACHE_DIR = config.DATA_DIR / "transcoded_cache"
+TRANSCODED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+_TRANSCODE_LOCK = threading.Lock()
+_ACTIVE_TRANSCODES: Dict[str, threading.Event] = {}
+
+def prune_transcode_cache(max_size_bytes: int = 2 * 1024 * 1024 * 1024):
+    """Keeps the transcoded audio cache under max_size_bytes (default 2GB)."""
+    try:
+        if not TRANSCODED_CACHE_DIR.exists():
+            return
+        files = list(TRANSCODED_CACHE_DIR.glob("*.mp3"))
+        total_size = sum(f.stat().st_size for f in files)
+        if total_size > max_size_bytes:
+            files.sort(key=lambda f: f.stat().st_mtime)
+            for f in files:
+                try:
+                    f_size = f.stat().st_size
+                    f.unlink(missing_ok=True)
+                    total_size -= f_size
+                    if total_size <= max_size_bytes * 0.75:
+                        break
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[Cache Pruning Error]: {e}")
+
+def get_streamable_audio_path(file_path: Path) -> Tuple[Path, str]:
+    """
+    Ensures the audio file is in a web-compatible, high-performance streaming format.
+    - MP3, M4A, AAC, OGG: Streamed directly in native format.
+    - WMA: Modern web browsers cannot decode WMA. Automatically transcodes to cached MP3 via FFmpeg.
+    - WAV: Huge uncompressed PCM files cause massive network load and seeking glitches in browsers.
+      Automatically transcodes to optimized cached MP3 via FFmpeg, with graceful fallback to WAV PCM.
+    Returns: (resolved_path, mime_type)
+    """
+    ext = file_path.suffix.lower()
+
+    # Direct streaming for formats natively supported across web browsers
+    if ext == ".mp3":
+        return file_path, "audio/mpeg"
+    elif ext in (".m4a", ".mp4"):
+        return file_path, "audio/mp4"
+    elif ext == ".aac":
+        return file_path, "audio/aac"
+    elif ext == ".ogg":
+        return file_path, "audio/ogg"
+
+    # WMA and WAV: Transcode to seekable cached MP3 via FFmpeg
+    if ext in (".wma", ".wav"):
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if ffmpeg_bin:
+            try:
+                st = file_path.stat()
+                cache_key = hashlib.sha256(f"{file_path}_{st.st_mtime}_{st.st_size}".encode()).hexdigest()[:24]
+                cached_mp3 = TRANSCODED_CACHE_DIR / f"{cache_key}.mp3"
+
+                if cached_mp3.exists() and cached_mp3.stat().st_size > 0:
+                    return cached_mp3, "audio/mpeg"
+
+                with _TRANSCODE_LOCK:
+                    if cached_mp3.exists() and cached_mp3.stat().st_size > 0:
+                        return cached_mp3, "audio/mpeg"
+
+                    event = _ACTIVE_TRANSCODES.get(cache_key)
+                    if event is None:
+                        event = threading.Event()
+                        _ACTIVE_TRANSCODES[cache_key] = event
+                        should_transcode = True
+                    else:
+                        should_transcode = False
+
+                if should_transcode:
+                    try:
+                        temp_mp3 = TRANSCODED_CACHE_DIR / f"{cache_key}_tmp_{secrets.token_hex(4)}.mp3"
+                        cmd = [
+                            ffmpeg_bin,
+                            "-y",
+                            "-i", str(file_path),
+                            "-vn",
+                            "-acodec", "libmp3lame",
+                            "-b:a", "128k",
+                            "-ar", "44100",
+                            str(temp_mp3)
+                        ]
+                        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90)
+                        if proc.returncode == 0 and temp_mp3.exists() and temp_mp3.stat().st_size > 0:
+                            temp_mp3.replace(cached_mp3)
+                            prune_transcode_cache()
+                        else:
+                            if temp_mp3.exists():
+                                temp_mp3.unlink(missing_ok=True)
+                    finally:
+                        with _TRANSCODE_LOCK:
+                            _ACTIVE_TRANSCODES.pop(cache_key, None)
+                        event.set()
+                else:
+                    event.wait(timeout=60)
+
+                if cached_mp3.exists() and cached_mp3.stat().st_size > 0:
+                    return cached_mp3, "audio/mpeg"
+            except Exception as e:
+                print(f"[Transcode Error] {file_path.name}: {e}")
+
+        # Fallback if FFmpeg is not installed or transcoding failed
+        if ext == ".wav":
+            return file_path, "audio/wav"
+        elif ext == ".wma":
+            return file_path, "audio/x-ms-wma"
+
+    mime, _ = mimetypes.guess_type(str(file_path))
+    return file_path, mime or "audio/mpeg"
+
 def stream_audio_range(file_path: Path, range_header: Optional[str] = None):
+    file_path, content_type = get_streamable_audio_path(file_path)
     file_size = file_path.stat().st_size
-    content_type, _ = mimetypes.guess_type(str(file_path))
-    content_type = content_type or "audio/mpeg"
 
     start = 0
     end = file_size - 1
@@ -1016,9 +1130,8 @@ def stream_rav_tzvi(file: str = Query(..., description="Relative file subpath"),
     if not file_path or not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="Audio file not found")
 
+    file_path, mime_type = get_streamable_audio_path(file_path)
     file_size = file_path.stat().st_size
-    mime_type, _ = mimetypes.guess_type(str(file_path))
-    mime_type = mime_type or "audio/mpeg"
 
     range_header = request.headers.get("range") if request else None
 
@@ -1026,19 +1139,17 @@ def stream_rav_tzvi(file: str = Query(..., description="Relative file subpath"),
     CHUNK_SIZE = 2 * 1024 * 1024  # 2 MB
 
     if not range_header:
-        start = 0
-        end = min(CHUNK_SIZE - 1, file_size - 1)
-        length = end - start + 1
-        with open(file_path, "rb") as f:
-            data = f.read(length)
+        def iter_full():
+            with open(file_path, "rb") as f:
+                while chunk := f.read(128 * 1024):
+                    yield chunk
         headers = {
-            "Content-Range": f"bytes {start}-{end}/{file_size}",
             "Accept-Ranges": "bytes",
-            "Content-Length": str(length),
+            "Content-Length": str(file_size),
             "Content-Type": mime_type,
             "Cache-Control": "private, max-age=86400"
         }
-        return Response(content=data, status_code=206, headers=headers)
+        return StreamingResponse(iter_full(), status_code=200, headers=headers)
 
     try:
         byte_range = range_header.replace("bytes=", "").split("-")
