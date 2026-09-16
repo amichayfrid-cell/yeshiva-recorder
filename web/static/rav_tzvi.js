@@ -438,10 +438,23 @@ audio.addEventListener('ended', () => {
 // Automatic Recovery on stream interrupt or token expiry
 let isRecovering = false;
 audio.addEventListener('error', async () => {
-  console.warn("Audio playback error encountered, attempting auto-recovery...", audio.error);
+  console.warn("Audio playback error encountered:", audio.error);
   if (isRecovering || !currentPlayingSubpath) return;
-  isRecovering = true;
+
   const savedTime = audio.currentTime || 0;
+  // If failed right at the start (savedTime === 0), the file format is corrupt or conversion failed
+  if (savedTime === 0) {
+    playIcon.textContent = '▶';
+    const isWma = currentPlayingSubpath.toLowerCase().endsWith('.wma');
+    const msg = isWma
+      ? "לא ניתן לנגן קובץ WMA זה (ייתכן שהקובץ פגום או מוגן בזכויות יוצרים DRM)."
+      : "שגיאה בטעינת השיעור או שהקובץ אינו נתמך.";
+    playerTrackName.textContent = '⚠️ ' + msg;
+    alert(msg);
+    return;
+  }
+
+  isRecovering = true;
   try {
     const tokenRes = await fetch(`/api/rav-tzvi/token?file=${encodeURIComponent(currentPlayingSubpath)}`, { method: 'POST' });
     if (tokenRes.ok) {

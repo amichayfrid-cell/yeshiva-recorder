@@ -83,6 +83,91 @@ def prune_transcode_cache(max_size_bytes: int = 2 * 1024 * 1024 * 1024):
     except Exception as e:
         print(f"[Cache Pruning Error]: {e}")
 
+def transcode_wma_to_mp3(file_path: Path, output_mp3: Path) -> bool:
+    """
+    Robustly transcodes any WMA file (WMA1, WMA2, WMA Pro, WMA Voice, ASF) to MP3.
+    Uses resilient demuxing flags to handle corrupt packet headers, missing ASF indexes,
+    negative timestamps, and multi-stream containers (album art).
+    """
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        print(f"[WMA Transcode Error] FFmpeg binary not found on server!")
+        return False
+
+    temp_mp3 = output_mp3.parent / f"{output_mp3.stem}_tmp_{secrets.token_hex(4)}.mp3"
+
+    # Stage 1: Fast high-compatibility transcode with timestamp regeneration and first-audio mapping
+    cmd1 = [
+        ffmpeg_bin,
+        "-y",
+        "-threads", "0",
+        "-fflags", "+genpts+discardcorrupt",
+        "-err_detect", "ignore_err",
+        "-avoid_negative_ts", "make_zero",
+        "-i", str(file_path),
+        "-map", "0:a:0?",
+        "-vn",
+        "-c:a", "libmp3lame",
+        "-b:a", "128k",
+        "-ar", "44100",
+        str(temp_mp3)
+    ]
+
+    try:
+        proc = subprocess.run(cmd1, capture_output=True, timeout=180)
+        if proc.returncode == 0 and temp_mp3.exists() and temp_mp3.stat().st_size > 1000:
+            temp_mp3.replace(output_mp3)
+            print(f"[WMA Transcode Success] {file_path.name} -> {output_mp3.name} ({round(output_mp3.stat().st_size / 1024 / 1024, 2)} MB)")
+            return True
+        else:
+            err_msg = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else "No stderr"
+            print(f"[WMA Transcode Attempt 1 Failed] {file_path.name} (exit {proc.returncode}): {err_msg[-350:]}")
+    except Exception as e:
+        print(f"[WMA Transcode Attempt 1 Error] {file_path.name}: {e}")
+    finally:
+        if temp_mp3.exists() and not output_mp3.exists():
+            try:
+                temp_mp3.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    # Stage 2: Resilient fallback for voice/corrupted ASF streams (forces audio stream, variable bitrate)
+    temp_mp3 = output_mp3.parent / f"{output_mp3.stem}_tmp_{secrets.token_hex(4)}.mp3"
+    cmd2 = [
+        ffmpeg_bin,
+        "-y",
+        "-fflags", "+genpts+discardcorrupt+nobuffer",
+        "-err_detect", "ignore_err",
+        "-avoid_negative_ts", "make_zero",
+        "-i", str(file_path),
+        "-map", "0:a?",
+        "-vn",
+        "-c:a", "libmp3lame",
+        "-q:a", "4",
+        "-ar", "44100",
+        str(temp_mp3)
+    ]
+
+    try:
+        proc = subprocess.run(cmd2, capture_output=True, timeout=180)
+        if proc.returncode == 0 and temp_mp3.exists() and temp_mp3.stat().st_size > 1000:
+            temp_mp3.replace(output_mp3)
+            print(f"[WMA Transcode Success (Stage 2)] {file_path.name} -> {output_mp3.name}")
+            return True
+        else:
+            err_msg = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else "No stderr"
+            print(f"[WMA Transcode Attempt 2 Failed] {file_path.name} (exit {proc.returncode}): {err_msg[-350:]}")
+    except Exception as e:
+        print(f"[WMA Transcode Attempt 2 Error] {file_path.name}: {e}")
+    finally:
+        if temp_mp3.exists() and not output_mp3.exists():
+            try:
+                temp_mp3.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    return False
+
 def get_streamable_audio_path(file_path: Path) -> Tuple[Path, str]:
     """
     Ensures the audio file is in a web-compatible, high-performance streaming format.
@@ -106,65 +191,44 @@ def get_streamable_audio_path(file_path: Path) -> Tuple[Path, str]:
 
     # WMA: Modern browsers do not support WMA. Transcode to seekable cached MP3 via FFmpeg
     if ext == ".wma":
-        ffmpeg_bin = shutil.which("ffmpeg")
-        if ffmpeg_bin:
-            try:
-                st = file_path.stat()
-                cache_key = hashlib.sha256(f"{file_path}_{st.st_mtime}_{st.st_size}".encode()).hexdigest()[:24]
-                cached_mp3 = TRANSCODED_CACHE_DIR / f"{cache_key}.mp3"
+        try:
+            st = file_path.stat()
+            cache_key = hashlib.sha256(f"{file_path}_{st.st_mtime}_{st.st_size}".encode()).hexdigest()[:24]
+            cached_mp3 = TRANSCODED_CACHE_DIR / f"{cache_key}.mp3"
 
-                if cached_mp3.exists() and cached_mp3.stat().st_size > 0:
+            if cached_mp3.exists() and cached_mp3.stat().st_size > 1000:
+                return cached_mp3, "audio/mpeg"
+
+            with _TRANSCODE_LOCK:
+                if cached_mp3.exists() and cached_mp3.stat().st_size > 1000:
                     return cached_mp3, "audio/mpeg"
 
-                with _TRANSCODE_LOCK:
-                    if cached_mp3.exists() and cached_mp3.stat().st_size > 0:
-                        return cached_mp3, "audio/mpeg"
-
-                    event = _ACTIVE_TRANSCODES.get(cache_key)
-                    if event is None:
-                        event = threading.Event()
-                        _ACTIVE_TRANSCODES[cache_key] = event
-                        should_transcode = True
-                    else:
-                        should_transcode = False
-
-                if should_transcode:
-                    try:
-                        temp_mp3 = TRANSCODED_CACHE_DIR / f"{cache_key}_tmp_{secrets.token_hex(4)}.mp3"
-                        cmd = [
-                            ffmpeg_bin,
-                            "-y",
-                            "-threads", "0",
-                            "-i", str(file_path),
-                            "-vn",
-                            "-acodec", "libmp3lame",
-                            "-preset", "ultrafast",
-                            "-compression_level", "0",
-                            "-ac", "1",
-                            "-b:a", "96k",
-                            "-ar", "44100",
-                            str(temp_mp3)
-                        ]
-                        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90)
-                        if proc.returncode == 0 and temp_mp3.exists() and temp_mp3.stat().st_size > 0:
-                            temp_mp3.replace(cached_mp3)
-                            prune_transcode_cache()
-                        else:
-                            if temp_mp3.exists():
-                                temp_mp3.unlink(missing_ok=True)
-                    finally:
-                        with _TRANSCODE_LOCK:
-                            _ACTIVE_TRANSCODES.pop(cache_key, None)
-                        event.set()
+                event = _ACTIVE_TRANSCODES.get(cache_key)
+                if event is None:
+                    event = threading.Event()
+                    _ACTIVE_TRANSCODES[cache_key] = event
+                    should_transcode = True
                 else:
-                    event.wait(timeout=60)
+                    should_transcode = False
 
-                if cached_mp3.exists() and cached_mp3.stat().st_size > 0:
-                    return cached_mp3, "audio/mpeg"
-            except Exception as e:
-                print(f"[Transcode Error] {file_path.name}: {e}")
+            if should_transcode:
+                try:
+                    success = transcode_wma_to_mp3(file_path, cached_mp3)
+                    if success:
+                        prune_transcode_cache()
+                finally:
+                    with _TRANSCODE_LOCK:
+                        _ACTIVE_TRANSCODES.pop(cache_key, None)
+                    event.set()
+            else:
+                event.wait(timeout=180)
 
-        # Fallback if FFmpeg is not installed or transcoding failed
+            if cached_mp3.exists() and cached_mp3.stat().st_size > 1000:
+                return cached_mp3, "audio/mpeg"
+        except Exception as e:
+            print(f"[Transcode Error] {file_path.name}: {e}")
+
+        # Fallback if transcoding failed
         return file_path, "audio/x-ms-wma"
 
     mime, _ = mimetypes.guess_type(str(file_path))
