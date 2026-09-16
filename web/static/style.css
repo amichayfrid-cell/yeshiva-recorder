@@ -368,12 +368,12 @@ body {
     font-size: 0.9rem;
     color: var(--text-main);
     cursor: pointer;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
+    word-break: break-word;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    min-height: 42px;
 }
 
 .folder-select-btn:hover {

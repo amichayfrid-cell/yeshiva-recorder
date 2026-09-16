@@ -178,7 +178,7 @@ function renderExplorer(folders, files, isSearchResult = false) {
       card.innerHTML = `
         <span class="folder-icon">📁</span>
         <div style="flex: 1; min-width: 0;">
-          <div class="folder-name" title="${escapeHtml(folder.name)}">${escapeHtml(folder.name)}</div>
+          <div class="folder-name" style="white-space: normal !important; word-break: break-word !important; overflow-wrap: break-word !important; line-height: 1.4 !important; display: block !important;" title="${escapeHtml(folder.name)}">${escapeHtml(folder.name)}</div>
           <div class="folder-sub">${escapeHtml(subText)}</div>
         </div>
       `;
