@@ -287,9 +287,9 @@ function renderExplorerView() {
              id="folder-item-${idx}" 
              onclick="handleItemClick(${idx})"
              onmouseenter="setHighlightedIndex(${idx})">
-            <div style="display: flex; align-items: center; gap: 0.6rem;">
-                <span>📁</span>
-                <span style="font-weight: 500;">${escapeHtml(sub.name)}</span>
+            <div style="display: flex; align-items: center; gap: 0.6rem; min-width: 0; flex: 1;">
+                <span style="flex-shrink: 0;">📁</span>
+                <span style="font-weight: 500; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; word-break: break-word; line-height: 1.35;">${escapeHtml(sub.name)}</span>
             </div>
             <span style="color: var(--text-muted); font-size: 0.85rem;">היכנס ❮</span>
         </div>
