@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 # Base Paths (Local Server Storage)
@@ -15,13 +16,28 @@ MAX_HISTORY_ENTRIES = 500  # Maximum records in history
 NETWORK_MOUNT_POINT = Path("/mnt/yeshiva_share")
 NETWORK_TARGET_DIR = NETWORK_MOUNT_POINT / "שיעורים למיון"
 
+_MOUNT_CACHE = None
+_MOUNT_CACHE_TIME = 0.0
+
 def is_network_share_mounted() -> bool:
-    """Checks if NETWORK_MOUNT_POINT exists and actually contains files/folders (not an unmounted empty dir)."""
+    """Checks if NETWORK_MOUNT_POINT exists and actually contains files/folders (cached for 15s)."""
+    global _MOUNT_CACHE, _MOUNT_CACHE_TIME
+    now = time.time()
+    if _MOUNT_CACHE is not None and (now - _MOUNT_CACHE_TIME) < 15.0:
+        return _MOUNT_CACHE
+
     if not NETWORK_MOUNT_POINT.exists() or not NETWORK_MOUNT_POINT.is_dir():
+        _MOUNT_CACHE = False
+        _MOUNT_CACHE_TIME = now
         return False
     try:
-        return any(item for item in NETWORK_MOUNT_POINT.iterdir() if not item.name.startswith("."))
+        res = any(item for item in NETWORK_MOUNT_POINT.iterdir() if not item.name.startswith("."))
+        _MOUNT_CACHE = res
+        _MOUNT_CACHE_TIME = now
+        return res
     except Exception:
+        _MOUNT_CACHE = False
+        _MOUNT_CACHE_TIME = now
         return False
 
 # Target Directory Resolver (uses Network if mounted, falls back to Local Staging)

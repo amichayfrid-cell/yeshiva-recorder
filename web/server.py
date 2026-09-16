@@ -619,13 +619,21 @@ def find_rav_tzvi_archive(base_mount: Path) -> Optional[Path]:
 
 _RAV_TZVI_SOURCES_CACHE = None
 _RAV_TZVI_CACHE_TIME = 0.0
-RAV_TZVI_CACHE_TTL = 30.0  # Cache sources for 30s to prevent constant SMB share re-scanning
+RAV_TZVI_CACHE_TTL = 300.0  # Cache sources for 5m to prevent constant SMB share re-scanning
+
+_RAV_TZVI_BROWSE_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+RAV_TZVI_BROWSE_CACHE_TTL = 60.0  # Cache folder listings for 60s for instantaneous browsing
+
+_RAV_TZVI_SEARCH_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_RAV_TZVI_CATALOG_CACHE: Optional[List[Dict[str, Any]]] = None
+_RAV_TZVI_CATALOG_TIME: float = 0.0
+RAV_TZVI_CATALOG_TTL = 900.0  # In-memory catalog cache for 15 minutes
 
 def get_rav_tzvi_sources() -> Dict[str, Dict[str, Any]]:
     """
     Dynamically scans the network share to discover Rav Tzvi's current zman folder
     (e.g., 'אלול התשפ''ו' or whatever it changes to) and the Archive folder.
-    Cached for 30s to ensure instantaneous responses without hammering the SMB network mount.
+    Cached for 5 minutes to ensure instantaneous responses without hammering the SMB network mount.
     """
     global _RAV_TZVI_SOURCES_CACHE, _RAV_TZVI_CACHE_TIME
     now = time.time()
@@ -715,10 +723,19 @@ def resolve_rav_tzvi_path(subpath: str = "") -> Tuple[Optional[Path], Optional[s
 def browse_rav_tzvi(subpath: str = Query("", description="Relative folder subpath")):
     """
     Browses Rav Tzvi Kostiner's protected library in an Explorer-like structure.
-    Returns breadcrumbs, folders, playable audio files, and network connection status.
+    Blazing fast with single-pass os.scandir and in-memory caching.
     """
+    clean_subpath = (subpath or "").strip().replace("\\", "/").strip("/")
+    now = time.time()
+
+    # In-memory Cache Check
+    if clean_subpath in _RAV_TZVI_BROWSE_CACHE:
+        cached_time, cached_res = _RAV_TZVI_BROWSE_CACHE[clean_subpath]
+        if now - cached_time < RAV_TZVI_BROWSE_CACHE_TTL:
+            return cached_res
+
     sources = get_rav_tzvi_sources()
-    target_path, root_key, base_path = resolve_rav_tzvi_path(subpath)
+    target_path, root_key, base_path = resolve_rav_tzvi_path(clean_subpath)
     is_mounted = is_network_share_mounted()
     network_status = {
         "mounted": is_mounted,
@@ -733,10 +750,22 @@ def browse_rav_tzvi(subpath: str = Query("", description="Relative folder subpat
             p = info["path"]
             audio_count = 0
             subfolder_count = 0
-            if p.exists():
+            p_str = str(p)
+            if os.path.exists(p_str) and os.path.isdir(p_str):
                 try:
-                    audio_count = len([f for f in p.iterdir() if f.is_file() and f.suffix.lower() in config.USB_AUDIO_EXTENSIONS])
-                    subfolder_count = len([f for f in p.iterdir() if f.is_dir() and not f.name.startswith(".")])
+                    with os.scandir(p_str) as it:
+                        for entry in it:
+                            if entry.name.startswith("."):
+                                continue
+                            try:
+                                if entry.is_dir(follow_symlinks=False):
+                                    subfolder_count += 1
+                                elif entry.is_file(follow_symlinks=False):
+                                    ext = os.path.splitext(entry.name)[1].lower()
+                                    if ext in config.USB_AUDIO_EXTENSIONS:
+                                        audio_count += 1
+                            except OSError:
+                                continue
                 except Exception:
                     pass
             folders.append({
@@ -745,7 +774,7 @@ def browse_rav_tzvi(subpath: str = Query("", description="Relative folder subpat
                 "audio_count": audio_count,
                 "subfolder_count": subfolder_count
             })
-        return {
+        result = {
             "current_subpath": "",
             "breadcrumbs": [{"name": "שיעורי הרב צבי", "subpath": ""}],
             "folders": folders,
@@ -753,6 +782,8 @@ def browse_rav_tzvi(subpath: str = Query("", description="Relative folder subpat
             "total_items": len(folders),
             "network_status": network_status
         }
+        _RAV_TZVI_BROWSE_CACHE[clean_subpath] = (now, result)
+        return result
 
     # 2. Inside a section or folder
     if not target_path.exists() or not target_path.is_dir():
@@ -779,37 +810,56 @@ def browse_rav_tzvi(subpath: str = Query("", description="Relative folder subpat
 
     folders = []
     files = []
+    target_str = str(target_path)
+    base_str = str(base_path)
 
-    for item in sorted(target_path.iterdir(), key=lambda x: x.name):
-        if item.name.startswith(".") or item.name == "Thumbs.db":
-            continue
-        rel_to_base = item.relative_to(base_path).as_posix()
-        item_subpath = f"{root_key}/{rel_to_base}"
-        if item.is_dir():
-            audio_count = 0
-            subfolder_count = 0
-            try:
-                audio_count = len([f for f in item.iterdir() if f.is_file() and f.suffix.lower() in config.USB_AUDIO_EXTENSIONS])
-                subfolder_count = len([f for f in item.iterdir() if f.is_dir() and not f.name.startswith(".")])
-            except Exception:
-                pass
-            folders.append({
-                "name": item.name,
-                "subpath": item_subpath,
-                "audio_count": audio_count,
-                "subfolder_count": subfolder_count
-            })
-        elif item.is_file() and item.suffix.lower() in config.USB_AUDIO_EXTENSIONS:
-            stat = item.stat()
-            files.append({
-                "filename": item.name,
-                "subpath": item_subpath,
-                "size_mb": round(stat.st_size / (1024 * 1024), 2),
-                "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat()
-            })
+    try:
+        with os.scandir(target_str) as it:
+            for entry in it:
+                name = entry.name
+                if name.startswith(".") or name == "Thumbs.db":
+                    continue
+                try:
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                    is_file = entry.is_file(follow_symlinks=False)
+                except OSError:
+                    continue
+
+                rel_to_base = os.path.relpath(entry.path, base_str).replace("\\", "/")
+                item_subpath = f"{root_key}/{rel_to_base}"
+
+                if is_dir:
+                    # Single-pass fast listing: do NOT scan recursively into child subfolders
+                    folders.append({
+                        "name": name,
+                        "subpath": item_subpath,
+                        "audio_count": 0,
+                        "subfolder_count": 0
+                    })
+                elif is_file:
+                    ext = os.path.splitext(name)[1].lower()
+                    if ext in config.USB_AUDIO_EXTENSIONS:
+                        try:
+                            stat = entry.stat()
+                            size_mb = round(stat.st_size / (1024 * 1024), 2)
+                            mod_time = datetime.fromtimestamp(stat.st_mtime).isoformat()
+                        except OSError:
+                            size_mb = 0.0
+                            mod_time = datetime.now().isoformat()
+                        files.append({
+                            "filename": name,
+                            "subpath": item_subpath,
+                            "size_mb": size_mb,
+                            "modified_at": mod_time
+                        })
+    except (PermissionError, OSError) as e:
+        print(f"[Rav Tzvi] Error reading {target_str}: {e}")
+
+    folders.sort(key=lambda x: x["name"])
+    files.sort(key=lambda x: x["filename"])
 
     current_sp = f"{root_key}/{rel_inside_base}".rstrip("/")
-    return {
+    result = {
         "current_subpath": current_sp,
         "breadcrumbs": breadcrumbs,
         "folders": folders,
@@ -817,65 +867,129 @@ def browse_rav_tzvi(subpath: str = Query("", description="Relative folder subpat
         "total_items": len(folders) + len(files),
         "network_status": network_status
     }
+    _RAV_TZVI_BROWSE_CACHE[clean_subpath] = (now, result)
+    return result
+
+def get_rav_tzvi_catalog() -> List[Dict[str, Any]]:
+    """
+    Builds a lightweight in-memory catalog of all playable files and folders in Rav Tzvi sources.
+    Cached for 15 minutes to guarantee sub-millisecond search responses without touching SMB.
+    """
+    global _RAV_TZVI_CATALOG_CACHE, _RAV_TZVI_CATALOG_TIME
+    now = time.time()
+    if _RAV_TZVI_CATALOG_CACHE is not None and (now - _RAV_TZVI_CATALOG_TIME) < RAV_TZVI_CATALOG_TTL:
+        return _RAV_TZVI_CATALOG_CACHE
+
+    sources = get_rav_tzvi_sources()
+    catalog = []
+
+    for root_key, info in sources.items():
+        base_path = info["path"]
+        if not base_path.exists():
+            continue
+        base_str = str(base_path)
+        display_root = info["display_name"]
+
+        try:
+            for root, dirs, filenames in os.walk(base_str):
+                # Filter out system and hidden directories in-place
+                dirs[:] = [d for d in dirs if not d.startswith(".") and d not in ("$RECYCLE.BIN", "System Volume Information", "lost+found")]
+
+                rel = os.path.relpath(root, base_str).replace("\\", "/")
+                if rel == ".":
+                    rel = ""
+
+                for d in dirs:
+                    d_rel = f"{rel}/{d}".strip("/")
+                    item_subpath = f"{root_key}/{d_rel}"
+                    parent_display = f"{display_root} / {rel}" if rel else display_root
+                    catalog.append({
+                        "is_dir": True,
+                        "name": d,
+                        "name_lower": d.lower(),
+                        "subpath": item_subpath,
+                        "folder_path": parent_display
+                    })
+
+                for f in filenames:
+                    if f.startswith(".") or f == "Thumbs.db":
+                        continue
+                    ext = os.path.splitext(f)[1].lower()
+                    if ext in config.USB_AUDIO_EXTENSIONS:
+                        f_rel = f"{rel}/{f}".strip("/")
+                        item_subpath = f"{root_key}/{f_rel}"
+                        parent_display = f"{display_root} / {rel}" if rel else display_root
+                        full_f_path = os.path.join(root, f)
+                        try:
+                            f_stat = os.stat(full_f_path)
+                            size_mb = round(f_stat.st_size / (1024 * 1024), 2)
+                            mtime = datetime.fromtimestamp(f_stat.st_mtime).isoformat()
+                        except OSError:
+                            size_mb = 0.0
+                            mtime = ""
+                        catalog.append({
+                            "is_dir": False,
+                            "filename": f,
+                            "name_lower": f.lower(),
+                            "subpath": item_subpath,
+                            "folder_path": parent_display,
+                            "size_mb": size_mb,
+                            "modified_at": mtime
+                        })
+        except Exception as e:
+            print(f"[Rav Tzvi Catalog Error in {root_key}]: {e}")
+
+    _RAV_TZVI_CATALOG_CACHE = catalog
+    _RAV_TZVI_CATALOG_TIME = now
+    return catalog
 
 @app.get("/api/rav-tzvi/search")
 def search_rav_tzvi(q: str = Query("", description="Search query across all folders")):
     """
-    Recursively searches across all Rav Tzvi library sections matching query q.
+    Lightning-fast in-memory search across all Rav Tzvi library sections.
     """
     query = q.strip().lower()
-    if not query:
+    if len(query) < 2:
         return {"query": q, "folders": [], "files": [], "total_items": 0}
 
-    sources = get_rav_tzvi_sources()
+    now = time.time()
+    if query in _RAV_TZVI_SEARCH_CACHE:
+        cached_time, cached_res = _RAV_TZVI_SEARCH_CACHE[query]
+        if now - cached_time < 180.0:
+            return cached_res
+
+    catalog = get_rav_tzvi_catalog()
     folders = []
     files = []
 
-    for root_key, info in sources.items():
-        base = info["path"]
-        if not base.exists():
-            continue
-        try:
-            for item in base.rglob("*"):
-                if item.name.startswith(".") or item.name == "Thumbs.db":
-                    continue
-                rel_posix = item.relative_to(base).as_posix()
-                item_subpath = f"{root_key}/{rel_posix}"
-                if query in item.name.lower():
-                    folder_rel = "/".join(rel_posix.split("/")[:-1])
-                    display_folder = f"{info['display_name']} / {folder_rel}" if folder_rel else info['display_name']
-                    if item.is_dir():
-                        audio_count = 0
-                        try:
-                            audio_count = len([f for f in item.iterdir() if f.is_file() and f.suffix.lower() in config.USB_AUDIO_EXTENSIONS])
-                        except Exception:
-                            pass
-                        folders.append({
-                            "name": item.name,
-                            "subpath": item_subpath,
-                            "folder_path": display_folder,
-                            "audio_count": audio_count
-                        })
-                    elif item.is_file() and item.suffix.lower() in config.USB_AUDIO_EXTENSIONS:
-                        stat = item.stat()
-                        files.append({
-                            "filename": item.name,
-                            "subpath": item_subpath,
-                            "folder_path": display_folder,
-                            "size_mb": round(stat.st_size / (1024 * 1024), 2),
-                            "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat()
-                        })
-                if len(folders) + len(files) >= 150:
-                    break
-        except Exception as e:
-            print(f"[Search Error in {root_key}]: {e}")
+    for item in catalog:
+        if query in item["name_lower"]:
+            if item["is_dir"]:
+                folders.append({
+                    "name": item["name"],
+                    "subpath": item["subpath"],
+                    "folder_path": item["folder_path"],
+                    "audio_count": 0
+                })
+            else:
+                files.append({
+                    "filename": item["filename"],
+                    "subpath": item["subpath"],
+                    "folder_path": item["folder_path"],
+                    "size_mb": item["size_mb"],
+                    "modified_at": item["modified_at"]
+                })
+            if len(folders) + len(files) >= 150:
+                break
 
-    return {
+    result = {
         "query": q,
         "folders": folders,
         "files": files,
         "total_items": len(folders) + len(files)
     }
+    _RAV_TZVI_SEARCH_CACHE[query] = (now, result)
+    return result
 
 @app.get("/api/rav-tzvi/stream")
 def stream_rav_tzvi(file: str = Query(..., description="Relative file subpath"), token: str = Query(None), request: Request = None):

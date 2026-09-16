@@ -2,8 +2,6 @@
    Rav Tzvi Protected Library - Explorer-like Design (Vanilla CSS, RTL)
    ========================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;500;600;700;800&display=swap');
-
 :root {
   --explorer-bg: #f8fafc;
   --explorer-card-bg: #ffffff;
@@ -570,4 +568,24 @@ body {
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* Empty View & Loading State */
+.empty-view {
+  text-align: center;
+  padding: 60px 20px;
+}
+
+.spinner {
+  width: 42px;
+  height: 42px;
+  margin: 0 auto 12px auto;
+  border: 4px solid #e2e8f0;
+  border-top-color: var(--primary-accent);
+  border-radius: 50%;
+  animation: explorerSpin 0.7s linear infinite;
+}
+
+@keyframes explorerSpin {
+  to { transform: rotate(360deg); }
 }

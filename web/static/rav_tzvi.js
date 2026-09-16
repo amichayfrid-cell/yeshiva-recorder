@@ -25,6 +25,25 @@ let searchDebounceTimer = null;
 let isSearching = false;
 let currentBreadcrumbs = [];
 let currentNetworkStatus = null;
+let activeBrowseController = null;
+let activeSearchController = null;
+
+function showLoadingState(message = 'טוען תוכן תיקייה...') {
+  const foldersSection = document.getElementById('foldersSection');
+  const filesSection = document.getElementById('filesSection');
+  const emptyView = document.getElementById('emptyView');
+  if (foldersSection) foldersSection.style.display = 'none';
+  if (filesSection) filesSection.style.display = 'none';
+  if (emptyView) {
+    emptyView.style.display = 'block';
+    const emptyIcon = document.getElementById('emptyIcon');
+    const emptyTitle = document.getElementById('emptyTitle');
+    const emptySubtext = document.getElementById('emptySubtext');
+    if (emptyIcon) emptyIcon.innerHTML = '<div class="spinner"></div>';
+    if (emptyTitle) emptyTitle.textContent = message;
+    if (emptySubtext) emptySubtext.textContent = 'אנא המתן';
+  }
+}
 
 // ==========================================
 // Folder Navigation & API Fetch
@@ -39,7 +58,16 @@ async function loadFolder(subpath = '', pushHistory = true) {
     backBtn.disabled = historyStack.length === 0;
     searchInput.value = '';
 
-    const res = await fetch(`/api/rav-tzvi/browse?subpath=${encodeURIComponent(subpath)}`);
+    if (activeBrowseController) {
+      activeBrowseController.abort();
+    }
+    activeBrowseController = new AbortController();
+
+    showLoadingState('טוען תיקייה...');
+
+    const res = await fetch(`/api/rav-tzvi/browse?subpath=${encodeURIComponent(subpath)}`, {
+      signal: activeBrowseController.signal
+    });
     if (!res.ok) {
       throw new Error('שגיאה בטעינת התיקייה');
     }
@@ -54,7 +82,9 @@ async function loadFolder(subpath = '', pushHistory = true) {
     renderBreadcrumbs(currentBreadcrumbs);
     renderExplorer(loadedFolders, loadedFiles);
   } catch (err) {
-    console.error('Error loading folder:', err);
+    if (err.name !== 'AbortError') {
+      console.error('Error loading folder:', err);
+    }
   }
 }
 
@@ -215,14 +245,33 @@ function handleSearch() {
   clearTimeout(searchDebounceTimer);
 
   if (!query) {
+    if (activeSearchController) {
+      activeSearchController.abort();
+    }
     clearSearch();
+    return;
+  }
+
+  // Require at least 2 characters for library-wide search
+  if (query.length < 2) {
     return;
   }
 
   searchDebounceTimer = setTimeout(async () => {
     isSearching = true;
+    if (activeSearchController) {
+      activeSearchController.abort();
+    }
+    activeSearchController = new AbortController();
+
+    showLoadingState(`מחפש בספרייה "${escapeHtml(query)}"...`);
+    const searchIcon = document.querySelector('.search-icon');
+    if (searchIcon) searchIcon.textContent = '⏳';
+
     try {
-      const res = await fetch(`/api/rav-tzvi/search?q=${encodeURIComponent(query)}`);
+      const res = await fetch(`/api/rav-tzvi/search?q=${encodeURIComponent(query)}`, {
+        signal: activeSearchController.signal
+      });
       if (!res.ok) return;
       const data = await res.json();
 
@@ -235,9 +284,13 @@ function handleSearch() {
 
       renderExplorer(data.folders || [], data.files || [], true);
     } catch (e) {
-      console.error('Search error:', e);
+      if (e.name !== 'AbortError') {
+        console.error('Search error:', e);
+      }
+    } finally {
+      if (searchIcon) searchIcon.textContent = '🔍';
     }
-  }, 200);
+  }, 400);
 }
 
 // ==========================================
