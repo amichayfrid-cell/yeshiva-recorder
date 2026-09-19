@@ -74,8 +74,8 @@ class TranscodeJob:
 _TRANSCODE_JOBS_LOCK = threading.Lock()
 _ACTIVE_TRANSCODE_JOBS: Dict[str, TranscodeJob] = {}
 
-def prune_transcode_cache(max_size_bytes: int = 2 * 1024 * 1024 * 1024):
-    """Keeps the transcoded audio cache under max_size_bytes (default 2GB)."""
+def prune_transcode_cache(max_size_bytes: int = 10 * 1024 * 1024 * 1024):
+    """Keeps the transcoded audio cache under max_size_bytes (default 10GB)."""
     try:
         if not TRANSCODED_CACHE_DIR.exists():
             return
@@ -97,7 +97,7 @@ def prune_transcode_cache(max_size_bytes: int = 2 * 1024 * 1024 * 1024):
 
 def _run_ffmpeg_transcode_job(job: TranscodeJob):
     """
-    Worker that transcodes WMA to MP3 with FFmpeg.
+    Worker that transcodes WMA/WAV to high-quality 192k MP3 with FFmpeg.
     Uses explicit -f mp3 format and .mp3 extension so FFmpeg never fails muxer detection.
     """
     ffmpeg_bin = shutil.which("ffmpeg")
@@ -109,7 +109,7 @@ def _run_ffmpeg_transcode_job(job: TranscodeJob):
             _ACTIVE_TRANSCODE_JOBS.pop(job.cache_key, None)
         return
 
-    # Stage 1: Fast multi-threaded transcode with full ASF/WMA error tolerance
+    # Stage 1: High-fidelity (192k), fast multi-threaded transcode
     cmd1 = [
         ffmpeg_bin,
         "-y",
@@ -121,7 +121,7 @@ def _run_ffmpeg_transcode_job(job: TranscodeJob):
         "-map", "0:a:0?",
         "-vn",
         "-c:a", "libmp3lame",
-        "-b:a", "128k",
+        "-b:a", "192k",
         "-ar", "44100",
         "-f", "mp3",
         str(job.temp_mp3)
@@ -150,7 +150,7 @@ def _run_ffmpeg_transcode_job(job: TranscodeJob):
                 "-map", "0:a?",
                 "-vn",
                 "-c:a", "libmp3lame",
-                "-q:a", "4",
+                "-q:a", "3",
                 "-ar", "44100",
                 "-f", "mp3",
                 str(job.temp_mp3)
@@ -181,9 +181,10 @@ def get_or_start_transcode_job(file_path: Path) -> Tuple[Optional[Path], Optiona
     """Returns (cached_mp3_path, job). If already cached, returns (cached_path, None)."""
     try:
         st = file_path.stat()
-        cache_key = hashlib.sha256(f"{file_path}_{st.st_mtime}_{st.st_size}".encode()).hexdigest()[:24]
+        # Stable CIFS/SMB cache key based on file name and exact byte size
+        cache_key = hashlib.sha256(f"{file_path.name}_{int(st.st_size)}".encode()).hexdigest()[:24]
     except Exception:
-        cache_key = hashlib.sha256(str(file_path).encode()).hexdigest()[:24]
+        cache_key = hashlib.sha256(str(file_path.name).encode()).hexdigest()[:24]
 
     cached_mp3 = TRANSCODED_CACHE_DIR / f"{cache_key}.mp3"
     if cached_mp3.exists() and cached_mp3.stat().st_size > 1000:
@@ -272,7 +273,7 @@ def serve_static_audio_range(file_path: Path, mime_type: str, request: Optional[
 
 def stream_transcoded_mp3(file_path: Path, request: Optional[Request] = None):
     """
-    Transcodes WMA files to seekable, high-quality MP3.
+    Transcodes non-MP3 files (WMA, WAV) to seekable, high-quality 192k MP3.
     Caches the result so any subsequent request or seek is 0ms instant.
     """
     cached_mp3, job = get_or_start_transcode_job(file_path)
@@ -286,20 +287,21 @@ def stream_transcoded_mp3(file_path: Path, request: Optional[Request] = None):
         return serve_static_audio_range(job.cached_mp3, "audio/mpeg", request)
 
     # Fallback to direct file serve if transcoding failed
-    return serve_static_audio_range(file_path, "audio/x-ms-wma", request)
+    ext = file_path.suffix.lower()
+    fallback_mime = "audio/wav" if ext == ".wav" else "audio/x-ms-wma"
+    return serve_static_audio_range(file_path, fallback_mime, request)
 
 def stream_audio_file(file_path: Path, request: Optional[Request] = None):
     """
     Unified audio streaming engine for all application endpoints.
-    - MP3, WAV, M4A, MP4, AAC, OGG: Streamed directly in native format with 0ms delay and full seeking.
-    - WMA: Modern web browsers cannot decode WMA. Automatically transcodes to cached MP3 via FFmpeg.
+    - MP3, M4A, MP4, AAC, OGG: Streamed directly in native format with 0ms delay and full seeking.
+    - WMA, WAV: High-quality transcode to 192k MP3 with permanent 0ms persistent caching.
     """
     ext = file_path.suffix.lower()
 
-    if ext in (".mp3", ".wav", ".m4a", ".mp4", ".aac", ".ogg"):
+    if ext in (".mp3", ".m4a", ".mp4", ".aac", ".ogg"):
         mime_map = {
             ".mp3": "audio/mpeg",
-            ".wav": "audio/wav",
             ".m4a": "audio/mp4",
             ".mp4": "audio/mp4",
             ".aac": "audio/aac",
@@ -308,7 +310,7 @@ def stream_audio_file(file_path: Path, request: Optional[Request] = None):
         mime_type = mime_map.get(ext, "audio/mpeg")
         return serve_static_audio_range(file_path, mime_type, request)
 
-    if ext == ".wma":
+    if ext in (".wma", ".wav"):
         return stream_transcoded_mp3(file_path, request)
 
     mime, _ = mimetypes.guess_type(str(file_path))

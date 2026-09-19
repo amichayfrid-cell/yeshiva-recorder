@@ -282,8 +282,20 @@ body {
 }
 
 .file-row.playing {
-  background: #f0fdf4;
-  border-right: 4px solid #16a34a;
+  background: #ede9fe !important;
+  border-right: 4px solid #7c3aed !important;
+}
+
+.file-row.playing .file-action-btn {
+  background: #6b21a8 !important;
+  color: #ffffff !important;
+  border-color: #581c87 !important;
+  box-shadow: 0 2px 5px rgba(107, 33, 168, 0.35) !important;
+}
+
+.file-row.playing .file-action-btn:hover {
+  background: #581c87 !important;
+  color: #ffffff !important;
 }
 
 .folder-card.selected,

@@ -302,8 +302,8 @@ async function playAudio(fileSubpath, filename) {
     return;
   }
 
-  const isWma = filename.toLowerCase().endsWith('.wma');
-  playerTrackName.textContent = (isWma ? 'ממיר WMA ל-MP3... ' : 'טוען... ') + filename.replace(/\.[^/.]+$/, '');
+  const isNonMp3 = filename.toLowerCase().endsWith('.wma') || filename.toLowerCase().endsWith('.wav');
+  playerTrackName.textContent = (isNonMp3 ? 'מכין שיעור להשמעה... ' : 'טוען... ') + filename.replace(/\.[^/.]+$/, '');
   playerTrackName.title = filename;
   playIcon.textContent = '⏳';
 
@@ -390,9 +390,9 @@ function highlightPlayingFile() {
   if (activeRow) {
     activeRow.classList.add('playing');
     const btn = activeRow.querySelector('.file-action-btn span');
-    if (btn) btn.textContent = audio.paused ? 'השמע ▶' : 'השהה ⏸';
+    if (btn) btn.textContent = audio.paused ? 'המשך ▶' : 'השהה ⏸';
     const icon = activeRow.querySelector('.file-icon');
-    if (icon) icon.textContent = '🔊';
+    if (icon) icon.textContent = audio.paused ? '⏸' : '🔊';
   }
 }
 
