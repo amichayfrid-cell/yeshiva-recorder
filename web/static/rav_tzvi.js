@@ -302,7 +302,8 @@ async function playAudio(fileSubpath, filename) {
     return;
   }
 
-  playerTrackName.textContent = 'טוען... ' + filename.replace(/\.[^/.]+$/, '');
+  const isWma = filename.toLowerCase().endsWith('.wma');
+  playerTrackName.textContent = (isWma ? 'ממיר WMA ל-MP3... ' : 'טוען... ') + filename.replace(/\.[^/.]+$/, '');
   playerTrackName.title = filename;
   playIcon.textContent = '⏳';
 
@@ -407,6 +408,10 @@ audio.addEventListener('waiting', () => {
 
 audio.addEventListener('playing', () => {
   playIcon.textContent = '⏸';
+  if (currentPlayingSubpath) {
+    const fn = currentPlayingSubpath.split('/').pop();
+    playerTrackName.textContent = fn.replace(/\.[^/.]+$/, '');
+  }
 });
 
 audio.addEventListener('pause', () => {

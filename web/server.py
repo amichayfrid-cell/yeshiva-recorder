@@ -66,11 +66,9 @@ class TranscodeJob:
         self.src_path = src_path
         self.cached_mp3 = cached_mp3
         self.temp_mp3 = temp_mp3
-        self.ready_event = threading.Event()
         self.done_event = threading.Event()
         self.success = False
         self.error: Optional[str] = None
-        self.process: Optional[subprocess.Popen] = None
         self.thread: Optional[threading.Thread] = None
 
 _TRANSCODE_JOBS_LOCK = threading.Lock()
@@ -99,27 +97,23 @@ def prune_transcode_cache(max_size_bytes: int = 2 * 1024 * 1024 * 1024):
 
 def _run_ffmpeg_transcode_job(job: TranscodeJob):
     """
-    Background worker that runs FFmpeg to convert WMA/WAV to MP3.
-    Signals ready_event as soon as the first ~32KB is on disk, enabling
-    sub-150ms playback start in browsers while encoding continues at 60x-100x speed.
+    Worker that transcodes WMA to MP3 with FFmpeg.
+    Uses explicit -f mp3 format and .mp3 extension so FFmpeg never fails muxer detection.
     """
     ffmpeg_bin = shutil.which("ffmpeg")
     if not ffmpeg_bin:
         print("[Transcode Error] FFmpeg binary not found on server!")
         job.error = "FFmpeg not installed"
-        job.ready_event.set()
         job.done_event.set()
         with _TRANSCODE_JOBS_LOCK:
             _ACTIVE_TRANSCODE_JOBS.pop(job.cache_key, None)
         return
 
-    # High-speed transcode: multi-threaded, fast probing, corrupted stream tolerance
+    # Stage 1: Fast multi-threaded transcode with full ASF/WMA error tolerance
     cmd1 = [
         ffmpeg_bin,
         "-y",
         "-threads", "0",
-        "-probesize", "65536",
-        "-analyzeduration", "1000000",
         "-fflags", "+genpts+discardcorrupt",
         "-err_detect", "ignore_err",
         "-avoid_negative_ts", "make_zero",
@@ -129,32 +123,23 @@ def _run_ffmpeg_transcode_job(job: TranscodeJob):
         "-c:a", "libmp3lame",
         "-b:a", "128k",
         "-ar", "44100",
+        "-f", "mp3",
         str(job.temp_mp3)
     ]
 
     try:
-        proc = subprocess.Popen(cmd1, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        job.process = proc
-
-        # Signal ready as soon as initial ~32KB is written or process ends
-        while proc.poll() is None:
-            if job.temp_mp3.exists() and job.temp_mp3.stat().st_size >= 32768:
-                job.ready_event.set()
-                break
-            time.sleep(0.03)
-
-        _, stderr = proc.communicate(timeout=600)
-
+        proc = subprocess.run(cmd1, capture_output=True, timeout=180)
         if proc.returncode == 0 and job.temp_mp3.exists() and job.temp_mp3.stat().st_size > 1000:
             job.temp_mp3.replace(job.cached_mp3)
             job.success = True
             print(f"[Transcode Success] {job.src_path.name} -> {job.cached_mp3.name} ({round(job.cached_mp3.stat().st_size / 1024 / 1024, 2)} MB)")
             prune_transcode_cache()
+            return
         else:
-            err_msg = stderr.decode("utf-8", errors="replace") if stderr else "unknown error"
+            err_msg = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else "unknown"
             print(f"[Transcode Attempt 1 Failed] {job.src_path.name} (exit {proc.returncode}): {err_msg[-300:]}")
 
-            # Stage 2: Resilient fallback for voice/corrupted ASF streams (forces any audio stream, variable bitrate)
+            # Stage 2: Resilient fallback for voice/corrupted ASF streams
             cmd2 = [
                 ffmpeg_bin,
                 "-y",
@@ -167,14 +152,16 @@ def _run_ffmpeg_transcode_job(job: TranscodeJob):
                 "-c:a", "libmp3lame",
                 "-q:a", "4",
                 "-ar", "44100",
+                "-f", "mp3",
                 str(job.temp_mp3)
             ]
-            proc2 = subprocess.run(cmd2, capture_output=True, timeout=300)
+            proc2 = subprocess.run(cmd2, capture_output=True, timeout=180)
             if proc2.returncode == 0 and job.temp_mp3.exists() and job.temp_mp3.stat().st_size > 1000:
                 job.temp_mp3.replace(job.cached_mp3)
                 job.success = True
                 print(f"[Transcode Success Stage 2] {job.src_path.name} -> {job.cached_mp3.name}")
                 prune_transcode_cache()
+                return
             else:
                 job.error = "FFmpeg transcode failed"
     except Exception as e:
@@ -186,7 +173,6 @@ def _run_ffmpeg_transcode_job(job: TranscodeJob):
                 job.temp_mp3.unlink(missing_ok=True)
             except Exception:
                 pass
-        job.ready_event.set()
         job.done_event.set()
         with _TRANSCODE_JOBS_LOCK:
             _ACTIVE_TRANSCODE_JOBS.pop(job.cache_key, None)
@@ -209,7 +195,7 @@ def get_or_start_transcode_job(file_path: Path) -> Tuple[Optional[Path], Optiona
 
         job = _ACTIVE_TRANSCODE_JOBS.get(cache_key)
         if job is None:
-            temp_mp3 = TRANSCODED_CACHE_DIR / f"{cache_key}_{secrets.token_hex(4)}.transcoding"
+            temp_mp3 = TRANSCODED_CACHE_DIR / f"{cache_key}_tmp_{secrets.token_hex(4)}.mp3"
             job = TranscodeJob(cache_key, file_path, cached_mp3, temp_mp3)
             _ACTIVE_TRANSCODE_JOBS[cache_key] = job
             t = threading.Thread(target=_run_ffmpeg_transcode_job, args=(job,), daemon=True)
@@ -286,77 +272,34 @@ def serve_static_audio_range(file_path: Path, mime_type: str, request: Optional[
 
 def stream_transcoded_mp3(file_path: Path, request: Optional[Request] = None):
     """
-    Transcodes non-MP3 files (WMA, WAV) in real-time.
-    - If already cached as MP3: Serves immediately with full HTTP 206 Partial Content Range.
-    - If not yet cached: Launches background FFmpeg transcode, waits ~50ms for initial bytes,
-      and returns a live progressive MP3 stream. Playback starts in under 150ms!
+    Transcodes WMA files to seekable, high-quality MP3.
+    Caches the result so any subsequent request or seek is 0ms instant.
     """
     cached_mp3, job = get_or_start_transcode_job(file_path)
     if cached_mp3:
         return serve_static_audio_range(cached_mp3, "audio/mpeg", request)
 
-    # Wait up to 6 seconds for FFmpeg to produce initial playable header/frames (32KB)
-    job.ready_event.wait(timeout=6.0)
+    # Wait for the transcode worker to complete
+    job.done_event.wait(timeout=180)
 
-    # Check if transcode already completed during the brief wait
     if job.cached_mp3.exists() and job.cached_mp3.stat().st_size > 1000:
         return serve_static_audio_range(job.cached_mp3, "audio/mpeg", request)
 
-    # If transcode failed completely, fallback to direct serving of source file
-    if job.done_event.is_set() and not job.success:
-        ext = file_path.suffix.lower()
-        fallback_mime = "audio/wav" if ext == ".wav" else "audio/x-ms-wma"
-        return serve_static_audio_range(file_path, fallback_mime, request)
-
-    def iter_progressive():
-        target_path = job.temp_mp3
-        for _ in range(100):
-            if target_path.exists():
-                break
-            if job.cached_mp3.exists():
-                target_path = job.cached_mp3
-                break
-            time.sleep(0.04)
-
-        if not target_path.exists() and not job.cached_mp3.exists():
-            return
-
-        read_path = job.cached_mp3 if job.cached_mp3.exists() else target_path
-        try:
-            with open(read_path, "rb") as f:
-                while True:
-                    data = f.read(64 * 1024)
-                    if data:
-                        yield data
-                    else:
-                        if job.done_event.is_set():
-                            while rest := f.read(64 * 1024):
-                                yield rest
-                            break
-                        time.sleep(0.04)
-        except (GeneratorExit, ConnectionResetError):
-            pass
-        except Exception as e:
-            print(f"[Progressive Stream Error] {file_path.name}: {e}")
-
-    headers = {
-        "Accept-Ranges": "none",
-        "Cache-Control": "no-cache",
-        "Content-Type": "audio/mpeg"
-    }
-    return StreamingResponse(iter_progressive(), media_type="audio/mpeg", status_code=200, headers=headers)
+    # Fallback to direct file serve if transcoding failed
+    return serve_static_audio_range(file_path, "audio/x-ms-wma", request)
 
 def stream_audio_file(file_path: Path, request: Optional[Request] = None):
     """
     Unified audio streaming engine for all application endpoints.
-    - MP3, M4A, MP4, AAC, OGG: Streamed directly with instant byte-range seeking.
-    - WMA, WAV: Handled via real-time progressive transcode streaming to MP3.
+    - MP3, WAV, M4A, MP4, AAC, OGG: Streamed directly in native format with 0ms delay and full seeking.
+    - WMA: Modern web browsers cannot decode WMA. Automatically transcodes to cached MP3 via FFmpeg.
     """
     ext = file_path.suffix.lower()
 
-    if ext in (".mp3", ".m4a", ".mp4", ".aac", ".ogg"):
+    if ext in (".mp3", ".wav", ".m4a", ".mp4", ".aac", ".ogg"):
         mime_map = {
             ".mp3": "audio/mpeg",
+            ".wav": "audio/wav",
             ".m4a": "audio/mp4",
             ".mp4": "audio/mp4",
             ".aac": "audio/aac",
@@ -365,7 +308,7 @@ def stream_audio_file(file_path: Path, request: Optional[Request] = None):
         mime_type = mime_map.get(ext, "audio/mpeg")
         return serve_static_audio_range(file_path, mime_type, request)
 
-    if ext in (".wma", ".wav"):
+    if ext == ".wma":
         return stream_transcoded_mp3(file_path, request)
 
     mime, _ = mimetypes.guess_type(str(file_path))
