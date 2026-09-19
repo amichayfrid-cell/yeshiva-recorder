@@ -99,7 +99,7 @@ function renderPendingLessons() {
                         <input type="range" class="seek-bar" id="seek-${index}" value="0" min="0" step="0.1" onchange="seekAudio('${index}')">
                         <span class="time-display" id="time-${index}">00:00 / --:--</span>
                     </div>
-                    <audio id="audio-${index}" src="/api/audio/stream?filename=${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}" preload="metadata" ontimeupdate="updateProgress('${index}')" onloadedmetadata="initAudioDuration('${index}')" onended="onAudioEnded('${index}')"></audio>
+                    <audio id="audio-${index}" src="/api/audio/stream?filename=${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}" preload="none" ontimeupdate="updateProgress('${index}')" onloadedmetadata="initAudioDuration('${index}')" onended="onAudioEnded('${index}')"></audio>
                 </div>
 
                 <!-- Classification Form Grid -->
