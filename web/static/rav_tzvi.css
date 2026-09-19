@@ -281,29 +281,35 @@ body {
   background: var(--explorer-hover);
 }
 
-.file-row.playing {
-  background: #ede9fe !important;
-  border-right: 4px solid #7c3aed !important;
-}
-
-.file-row.playing .file-action-btn {
-  background: #6b21a8 !important;
-  color: #ffffff !important;
-  border-color: #581c87 !important;
-  box-shadow: 0 2px 5px rgba(107, 33, 168, 0.35) !important;
-}
-
-.file-row.playing .file-action-btn:hover {
-  background: #581c87 !important;
-  color: #ffffff !important;
-}
-
 .folder-card.selected,
 .file-row.selected {
   background: #e0f2fe !important;
   border-color: #0284c7 !important;
   outline: 2px solid #0284c7 !important;
   box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.25) !important;
+}
+
+/* Playing Row - Takes highest precedence with light purple background & dark purple button */
+.file-row.playing,
+.file-row.playing.selected {
+  background: #ede9fe !important;
+  border-right: 5px solid #7c3aed !important;
+  outline: 2px solid #7c3aed !important;
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.25) !important;
+}
+
+.file-row.playing .file-action-btn,
+.file-row.playing.selected .file-action-btn {
+  background: #6b21a8 !important;
+  color: #ffffff !important;
+  border-color: #581c87 !important;
+  box-shadow: 0 2px 5px rgba(107, 33, 168, 0.35) !important;
+}
+
+.file-row.playing .file-action-btn:hover,
+.file-row.playing.selected .file-action-btn:hover {
+  background: #581c87 !important;
+  color: #ffffff !important;
 }
 
 .file-icon {

@@ -196,6 +196,7 @@ function renderExplorer(folders, files, isSearchResult = false) {
       const isPlaying = currentPlayingSubpath === file.subpath;
       row.className = `file-row ${isPlaying ? 'playing' : ''}`;
       row.id = `file-row-${encodeId(file.subpath)}`;
+      row.dataset.subpath = file.subpath;
       row.onclick = () => playAudio(file.subpath, file.filename);
 
       let metaText = `גודל: ${file.size_mb} MB`;
@@ -302,8 +303,11 @@ async function playAudio(fileSubpath, filename) {
     return;
   }
 
-  const isNonMp3 = filename.toLowerCase().endsWith('.wma') || filename.toLowerCase().endsWith('.wav');
-  playerTrackName.textContent = (isNonMp3 ? 'מכין שיעור להשמעה... ' : 'טוען... ') + filename.replace(/\.[^/.]+$/, '');
+  currentPlayingSubpath = fileSubpath;
+  highlightPlayingFile();
+
+  const isWma = filename.toLowerCase().endsWith('.wma');
+  playerTrackName.textContent = (isWma ? 'מכין שיעור WMA... ' : 'טוען... ') + filename.replace(/\.[^/.]+$/, '');
   playerTrackName.title = filename;
   playIcon.textContent = '⏳';
 
@@ -386,13 +390,20 @@ function highlightPlayingFile() {
     if (icon) icon.textContent = '🎵';
   });
 
-  const activeRow = document.getElementById(`file-row-${encodeId(currentPlayingSubpath)}`);
+  if (!currentPlayingSubpath) return;
+
+  let activeRow = document.getElementById(`file-row-${encodeId(currentPlayingSubpath)}`);
+  if (!activeRow) {
+    activeRow = Array.from(document.querySelectorAll('.file-row')).find(r => r.dataset.subpath === currentPlayingSubpath);
+  }
+
   if (activeRow) {
     activeRow.classList.add('playing');
     const btn = activeRow.querySelector('.file-action-btn span');
-    if (btn) btn.textContent = audio.paused ? 'המשך ▶' : 'השהה ⏸';
+    const isPaused = audio.paused;
+    if (btn) btn.textContent = isPaused ? 'המשך ▶' : 'השהה ⏸';
     const icon = activeRow.querySelector('.file-icon');
-    if (icon) icon.textContent = audio.paused ? '⏸' : '🔊';
+    if (icon) icon.textContent = isPaused ? '⏸' : '🔊';
   }
 }
 

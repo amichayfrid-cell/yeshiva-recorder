@@ -299,9 +299,10 @@ def stream_audio_file(file_path: Path, request: Optional[Request] = None):
     """
     ext = file_path.suffix.lower()
 
-    if ext in (".mp3", ".m4a", ".mp4", ".aac", ".ogg"):
+    if ext in (".mp3", ".wav", ".m4a", ".mp4", ".aac", ".ogg"):
         mime_map = {
             ".mp3": "audio/mpeg",
+            ".wav": "audio/wav",
             ".m4a": "audio/mp4",
             ".mp4": "audio/mp4",
             ".aac": "audio/aac",
@@ -310,7 +311,7 @@ def stream_audio_file(file_path: Path, request: Optional[Request] = None):
         mime_type = mime_map.get(ext, "audio/mpeg")
         return serve_static_audio_range(file_path, mime_type, request)
 
-    if ext in (".wma", ".wav"):
+    if ext == ".wma":
         return stream_transcoded_mp3(file_path, request)
 
     mime, _ = mimetypes.guess_type(str(file_path))
