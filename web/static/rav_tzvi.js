@@ -20,6 +20,21 @@ const volumeIcon = document.getElementById('volumeIcon');
 const backBtn = document.getElementById('backBtn');
 const breadcrumbsContainer = document.getElementById('breadcrumbsContainer');
 const searchInput = document.getElementById('searchInput');
+const videoModal = document.getElementById('videoModal');
+const videoPlayer = document.getElementById('videoPlayer');
+const videoModalTitle = document.getElementById('videoModalTitle');
+
+function isVideoFile(fn) {
+  if (!fn) return false;
+  const lower = fn.toLowerCase().trim();
+  return ['.mp4', '.mkv', '.webm', '.avi', '.mov', '.wmv', '.flv', '.m4v', '.3gp', '.mpg', '.mpeg', '.ts', '.asf', '.vob', '.ogv'].some(ext => lower.endsWith(ext));
+}
+
+function isDocFile(fn) {
+  if (!fn) return false;
+  const lower = fn.toLowerCase().trim();
+  return ['.pdf', '.doc', '.docx', '.txt', '.ppt', '.pptx', '.odt'].some(ext => lower.endsWith(ext));
+}
 
 let searchDebounceTimer = null;
 let isSearching = false;
@@ -188,30 +203,46 @@ function renderExplorer(folders, files, isSearchResult = false) {
     foldersSection.style.display = 'none';
   }
 
-  // Render Files
+  // Render Files (Audio and Video)
   if (files.length > 0) {
     filesSection.style.display = 'block';
     files.forEach(file => {
+      const isDoc = file.is_doc || isDocFile(file.filename);
+      const isVideo = !isDoc && (file.is_video || isVideoFile(file.filename));
       const row = document.createElement('div');
       const isPlaying = currentPlayingSubpath === file.subpath;
-      row.className = `file-row ${isPlaying ? 'playing' : ''}`;
+      row.className = `file-row ${isPlaying ? 'playing' : ''} ${isVideo ? 'is-video' : ''} ${isDoc ? 'is-doc' : ''}`;
       row.id = `file-row-${encodeId(file.subpath)}`;
       row.dataset.subpath = file.subpath;
-      row.onclick = () => playAudio(file.subpath, file.filename);
+      row.onclick = () => isDoc 
+        ? openDocument(file.subpath) 
+        : (isVideo ? playVideo(file.subpath, file.filename) : playAudio(file.subpath, file.filename));
 
       let metaText = `גודל: ${file.size_mb} MB`;
       if (isSearchResult && file.folder_path) {
         metaText = `מיקום: ${file.folder_path} • ${metaText}`;
       }
 
+      const fileIcon = isDoc ? '📄' : (isVideo ? '🎬' : (isPlaying ? '🔊' : '🎵'));
+      const actionText = isDoc 
+        ? 'פתח קובץ ↗' 
+        : (isVideo 
+          ? 'צפה בסרטון ▶' 
+          : (isPlaying && !audio.paused ? 'השהה ⏸' : 'השמע ▶'));
+      const tagHtml = isDoc 
+        ? '<span class="video-tag" style="background:#2563eb; color:#fff;">מסמך</span>' 
+        : (isVideo ? '<span class="video-tag">וידאו</span>' : '');
+
       row.innerHTML = `
-        <span class="file-icon">${isPlaying ? '🔊' : '🎵'}</span>
+        <span class="file-icon">${fileIcon}</span>
         <div class="file-info">
-          <div class="file-title" title="${escapeHtml(file.filename)}">${escapeHtml(file.filename)}</div>
+          <div class="file-title" title="${escapeHtml(file.filename)}">
+            ${tagHtml}${escapeHtml(file.filename)}
+          </div>
           <div class="file-meta">${escapeHtml(metaText)}</div>
         </div>
-        <button class="file-action-btn" onclick="event.stopPropagation(); playAudio('${escapeJsStr(file.subpath)}', '${escapeJsStr(file.filename)}')">
-          <span>${isPlaying && !audio.paused ? 'השהה ⏸' : 'השמע ▶'}</span>
+        <button class="file-action-btn" onclick="event.stopPropagation(); ${isDoc ? `openDocument('${escapeJsStr(file.subpath)}')` : (isVideo ? `playVideo('${escapeJsStr(file.subpath)}', '${escapeJsStr(file.filename)}')` : `playAudio('${escapeJsStr(file.subpath)}', '${escapeJsStr(file.filename)}')`)}">
+          <span>${actionText}</span>
         </button>
       `;
       filesList.appendChild(row);
@@ -292,6 +323,93 @@ function handleSearch() {
       if (searchIcon) searchIcon.textContent = '🔍';
     }
   }, 400);
+}
+
+// ==========================================
+// Document Viewer Logic
+// ==========================================
+async function openDocument(fileSubpath) {
+  try {
+    const tokenRes = await fetch(`/api/rav-tzvi/token?file=${encodeURIComponent(fileSubpath)}`, { method: 'POST' });
+    if (!tokenRes.ok) throw new Error('Token error');
+    const tokenData = await tokenRes.json();
+    window.open(`/api/rav-tzvi/stream?file=${encodeURIComponent(fileSubpath)}&token=${tokenData.token}`, '_blank');
+  } catch (err) {
+    console.error("Error opening document:", err);
+    alert("שגיאה בפתיחת המסמך.");
+  }
+}
+
+// ==========================================
+// Video Player Modal Logic
+// ==========================================
+async function playVideo(fileSubpath, filename) {
+  // Pause any audio playing in background
+  if (audio && !audio.paused) {
+    audio.pause();
+    playIcon.textContent = '▶';
+  }
+
+  currentPlayingSubpath = fileSubpath;
+  highlightPlayingFile();
+
+  if (videoModalTitle) {
+    videoModalTitle.textContent = filename.replace(/\.[^/.]+$/, '');
+  }
+  if (videoModal) {
+    videoModal.style.display = 'flex';
+  }
+  if (videoPlayer) {
+    videoPlayer.pause();
+    videoPlayer.src = '';
+  }
+
+  try {
+    const tokenRes = await fetch(`/api/rav-tzvi/token?file=${encodeURIComponent(fileSubpath)}`, { method: 'POST' });
+    if (!tokenRes.ok) throw new Error('Token error');
+    const tokenData = await tokenRes.json();
+
+    const streamUrl = `/api/rav-tzvi/stream?file=${encodeURIComponent(fileSubpath)}&token=${tokenData.token}`;
+    if (videoPlayer) {
+      videoPlayer.src = streamUrl;
+      videoPlayer.playbackRate = parseFloat(speedSelect.value) || 1.0;
+      try {
+        await videoPlayer.play();
+      } catch (playErr) {
+        if (playErr.name !== 'AbortError') {
+          console.warn("Video play warning:", playErr);
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Error playing video:", err);
+    alert("שגיאה בטעינת קובץ הווידאו או שפג תוקף הקישור.");
+  }
+}
+
+function closeVideoPlayer() {
+  if (videoPlayer) {
+    videoPlayer.pause();
+    videoPlayer.src = '';
+  }
+  if (videoModal) {
+    videoModal.style.display = 'none';
+  }
+}
+
+function toggleVideoFullscreen() {
+  if (!videoPlayer) return;
+  if (!document.fullscreenElement) {
+    if (videoPlayer.requestFullscreen) {
+      videoPlayer.requestFullscreen();
+    } else if (videoPlayer.webkitRequestFullscreen) {
+      videoPlayer.webkitRequestFullscreen();
+    }
+  } else {
+    if (document.exitFullscreen) {
+      document.exitFullscreen();
+    }
+  }
 }
 
 // ==========================================
@@ -708,9 +826,22 @@ document.addEventListener('keydown', e => {
     return;
   }
 
-  // Spacebar to play/pause audio
+  // Escape to close video player modal
+  if (e.key === 'Escape') {
+    if (videoModal && videoModal.style.display !== 'none') {
+      e.preventDefault();
+      closeVideoPlayer();
+      return;
+    }
+  }
+
+  // Spacebar to play/pause audio or video
   if (e.code === 'Space') {
     e.preventDefault();
+    if (videoModal && videoModal.style.display !== 'none' && videoPlayer) {
+      if (videoPlayer.paused) videoPlayer.play(); else videoPlayer.pause();
+      return;
+    }
     togglePlayPause();
     return;
   }

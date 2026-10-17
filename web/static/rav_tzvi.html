@@ -69,11 +69,11 @@
     <!-- Files Section -->
     <div id="filesSection">
       <div class="section-title">
-        <span>🎵</span>
-        <span>שיעורי שמע</span>
+        <span>🎬</span>
+        <span>שיעורי שמע ווידאו</span>
       </div>
       <div class="files-container" id="filesList">
-        <!-- Audio files injected via JS -->
+        <!-- Audio & Video files injected via JS -->
       </div>
     </div>
 
@@ -85,6 +85,29 @@
     </div>
 
   </main>
+
+  <!-- Video Player Modal Overlay -->
+  <div class="video-modal" id="videoModal" style="display: none;">
+    <div class="video-modal-backdrop" onclick="closeVideoPlayer()"></div>
+    <div class="video-modal-container">
+      <div class="video-modal-header">
+        <div class="video-modal-title">
+          <span class="video-modal-icon">🎬</span>
+          <span id="videoModalTitle">צפייה בשיעור</span>
+        </div>
+        <button class="video-close-btn" onclick="closeVideoPlayer()" title="סגור (Esc)">✕</button>
+      </div>
+      <div class="video-wrapper">
+        <video id="videoPlayer" controls controlslist="nodownload" playsinline preload="auto">
+          הדפדפן שלך אינו תומך בהצגת וידאו.
+        </video>
+      </div>
+      <div class="video-modal-footer">
+        <span class="video-author">מו"ר הרב צבי קוסטינר שליט"א</span>
+        <button class="video-fullscreen-btn" onclick="toggleVideoFullscreen()">⛶ מסך מלא</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Hidden native audio element with nodownload protection -->
   <audio id="audioPlayer" preload="none" controlslist="nodownload" style="display: none;"></audio>
@@ -143,6 +166,6 @@
     </div>
   </footer>
 
-  <script src="/static/rav_tzvi.js?v=4.0"></script>
+  <script src="/static/rav_tzvi.js?v=4.3"></script>
 </body>
 </html>
