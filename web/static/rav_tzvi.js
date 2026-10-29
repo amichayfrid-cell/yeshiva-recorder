@@ -23,6 +23,11 @@ const searchInput = document.getElementById('searchInput');
 const videoModal = document.getElementById('videoModal');
 const videoPlayer = document.getElementById('videoPlayer');
 const videoModalTitle = document.getElementById('videoModalTitle');
+const docModal = document.getElementById('docModal');
+const docModalTitle = document.getElementById('docModalTitle');
+const docModalIcon = document.getElementById('docModalIcon');
+const docContent = document.getElementById('docContent');
+const protectionToast = document.getElementById('protectionToast');
 
 function isVideoFile(fn) {
   if (!fn) return false;
@@ -33,7 +38,13 @@ function isVideoFile(fn) {
 function isDocFile(fn) {
   if (!fn) return false;
   const lower = fn.toLowerCase().trim();
-  return ['.pdf', '.doc', '.docx', '.txt', '.ppt', '.pptx', '.odt'].some(ext => lower.endsWith(ext));
+  return ['.pdf', '.doc', '.docx', '.txt', '.ppt', '.pptx', '.odt', '.rtf', '.xls', '.xlsx'].some(ext => lower.endsWith(ext));
+}
+
+function isImageFile(fn) {
+  if (!fn) return false;
+  const lower = fn.toLowerCase().trim();
+  return ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tif', '.tiff', '.heic', '.svg'].some(ext => lower.endsWith(ext));
 }
 
 let searchDebounceTimer = null;
@@ -60,6 +71,30 @@ function showLoadingState(message = 'טוען תוכן תיקייה...') {
   }
 }
 
+function showErrorState(title = 'שגיאה בטעינה', message = '') {
+  const foldersSection = document.getElementById('foldersSection');
+  const filesSection = document.getElementById('filesSection');
+  const emptyView = document.getElementById('emptyView');
+  if (foldersSection) foldersSection.style.display = 'none';
+  if (filesSection) filesSection.style.display = 'none';
+  if (emptyView) {
+    emptyView.style.display = 'block';
+    const emptyIcon = document.getElementById('emptyIcon');
+    const emptyTitle = document.getElementById('emptyTitle');
+    const emptySubtext = document.getElementById('emptySubtext');
+    if (emptyIcon) emptyIcon.textContent = '⚠️';
+    if (emptyTitle) emptyTitle.textContent = title;
+    if (emptySubtext) {
+      emptySubtext.innerHTML = `
+        <div>${escapeHtml(message)}</div>
+        <button class="nav-btn" style="margin-top: 14px; cursor: pointer;" onclick="loadFolder(currentSubpath, false)">
+          <span>🔄 נסה שוב</span>
+        </button>
+      `;
+    }
+  }
+}
+
 // ==========================================
 // Folder Navigation & API Fetch
 // ==========================================
@@ -80,11 +115,20 @@ async function loadFolder(subpath = '', pushHistory = true) {
 
     showLoadingState('טוען תיקייה...');
 
+    // 25s timeout to avoid indefinite spinner hang
+    const fetchTimeout = setTimeout(() => {
+      if (activeBrowseController) {
+        activeBrowseController.abort();
+      }
+    }, 25000);
+
     const res = await fetch(`/api/rav-tzvi/browse?subpath=${encodeURIComponent(subpath)}`, {
       signal: activeBrowseController.signal
     });
+    clearTimeout(fetchTimeout);
+
     if (!res.ok) {
-      throw new Error('שגיאה בטעינת התיקייה');
+      throw new Error(`שגיאה בטעינת התיקייה (${res.status})`);
     }
 
     const data = await res.json();
@@ -97,8 +141,12 @@ async function loadFolder(subpath = '', pushHistory = true) {
     renderBreadcrumbs(currentBreadcrumbs);
     renderExplorer(loadedFolders, loadedFiles);
   } catch (err) {
-    if (err.name !== 'AbortError') {
+    if (err.name === 'AbortError') {
+      console.warn('Browse request aborted or timed out');
+      showErrorState('הטעינה התעכבה או בוטלה', 'ייתכן ששרת הקבצים של הישיבה עמוס כרגע. אנא נסה שוב.');
+    } else {
       console.error('Error loading folder:', err);
+      showErrorState('שגיאה בטעינת התיקייה', err.message || 'לא ניתן לתקשר עם שרת הישיבה כעת');
     }
   }
 }
@@ -207,15 +255,17 @@ function renderExplorer(folders, files, isSearchResult = false) {
   if (files.length > 0) {
     filesSection.style.display = 'block';
     files.forEach(file => {
-      const isDoc = file.is_doc || isDocFile(file.filename);
-      const isVideo = !isDoc && (file.is_video || isVideoFile(file.filename));
+      const isImage = file.is_image || isImageFile(file.filename);
+      const isDoc = !isImage && (file.is_doc || isDocFile(file.filename));
+      const isOpenable = isDoc || isImage;
+      const isVideo = !isOpenable && (file.is_video || isVideoFile(file.filename));
       const row = document.createElement('div');
       const isPlaying = currentPlayingSubpath === file.subpath;
-      row.className = `file-row ${isPlaying ? 'playing' : ''} ${isVideo ? 'is-video' : ''} ${isDoc ? 'is-doc' : ''}`;
+      row.className = `file-row ${isPlaying ? 'playing' : ''} ${isVideo ? 'is-video' : ''} ${isOpenable ? 'is-doc' : ''}`;
       row.id = `file-row-${encodeId(file.subpath)}`;
       row.dataset.subpath = file.subpath;
-      row.onclick = () => isDoc 
-        ? openDocument(file.subpath) 
+      row.onclick = () => isOpenable 
+        ? openDocument(file.subpath, file.filename) 
         : (isVideo ? playVideo(file.subpath, file.filename) : playAudio(file.subpath, file.filename));
 
       let metaText = `גודל: ${file.size_mb} MB`;
@@ -223,15 +273,19 @@ function renderExplorer(folders, files, isSearchResult = false) {
         metaText = `מיקום: ${file.folder_path} • ${metaText}`;
       }
 
-      const fileIcon = isDoc ? '📄' : (isVideo ? '🎬' : (isPlaying ? '🔊' : '🎵'));
-      const actionText = isDoc 
-        ? 'פתח קובץ ↗' 
-        : (isVideo 
-          ? 'צפה בסרטון ▶' 
-          : (isPlaying && !audio.paused ? 'השהה ⏸' : 'השמע ▶'));
-      const tagHtml = isDoc 
-        ? '<span class="video-tag" style="background:#2563eb; color:#fff;">מסמך</span>' 
-        : (isVideo ? '<span class="video-tag">וידאו</span>' : '');
+      const fileIcon = isImage ? '🖼️' : (isDoc ? '📄' : (isVideo ? '🎬' : (isPlaying ? '🔊' : '🎵')));
+      const actionText = isImage
+        ? 'הצג תמונה ↗'
+        : (isDoc 
+          ? 'צפה במסמך ↗' 
+          : (isVideo 
+            ? 'צפה בסרטון ▶' 
+            : (isPlaying && !audio.paused ? 'השהה ⏸' : 'השמע ▶')));
+      const tagHtml = isImage
+        ? '<span class="video-tag" style="background:#059669; color:#fff;">תמונה</span>'
+        : (isDoc 
+          ? '<span class="video-tag" style="background:#2563eb; color:#fff;">מסמך</span>' 
+          : (isVideo ? '<span class="video-tag">וידאו</span>' : ''));
 
       row.innerHTML = `
         <span class="file-icon">${fileIcon}</span>
@@ -241,7 +295,7 @@ function renderExplorer(folders, files, isSearchResult = false) {
           </div>
           <div class="file-meta">${escapeHtml(metaText)}</div>
         </div>
-        <button class="file-action-btn" onclick="event.stopPropagation(); ${isDoc ? `openDocument('${escapeJsStr(file.subpath)}')` : (isVideo ? `playVideo('${escapeJsStr(file.subpath)}', '${escapeJsStr(file.filename)}')` : `playAudio('${escapeJsStr(file.subpath)}', '${escapeJsStr(file.filename)}')`)}">
+        <button class="file-action-btn" onclick="event.stopPropagation(); this.closest('.file-row').click();">
           <span>${actionText}</span>
         </button>
       `;
@@ -326,17 +380,121 @@ function handleSearch() {
 }
 
 // ==========================================
-// Document Viewer Logic
+// Document Viewer Logic (Protected In-Browser Preview)
 // ==========================================
-async function openDocument(fileSubpath) {
+let currentDocScale = 17;
+let toastTimeout = null;
+
+function showProtectionToast(msg = '🔒 העתקה, שמירה והדפסה חסומות להגנה על זכויות יוצרים') {
+  const toast = document.getElementById('protectionToast');
+  if (!toast) return;
+  toast.textContent = msg;
+  toast.style.display = 'flex';
+  clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(() => {
+    toast.style.display = 'none';
+  }, 2500);
+}
+
+async function openDocument(fileSubpath, filename) {
+  // Pause any audio playing in background
+  if (audio && !audio.paused) {
+    audio.pause();
+    playIcon.textContent = '▶';
+  }
+
+  const modal = document.getElementById('docModal');
+  const title = document.getElementById('docModalTitle');
+  const icon = document.getElementById('docModalIcon');
+  const content = document.getElementById('docContent');
+
+  if (!modal || !content) return;
+
+  const isImage = isImageFile(filename);
+  if (title) title.textContent = filename || 'צפייה במסמך';
+  if (icon) icon.textContent = isImage ? '🖼️' : '📄';
+
+  currentDocScale = 17;
+  content.style.fontSize = `${currentDocScale}px`;
+  content.innerHTML = `
+    <div class="doc-loading">
+      <span class="doc-spinner">⏳</span>
+      <span>טוען מסמך באוויר... אנא המתן</span>
+    </div>
+  `;
+
+  modal.style.display = 'flex';
+
   try {
     const tokenRes = await fetch(`/api/rav-tzvi/token?file=${encodeURIComponent(fileSubpath)}`, { method: 'POST' });
     if (!tokenRes.ok) throw new Error('Token error');
     const tokenData = await tokenRes.json();
-    window.open(`/api/rav-tzvi/stream?file=${encodeURIComponent(fileSubpath)}&token=${tokenData.token}`, '_blank');
+
+    const viewRes = await fetch(`/api/rav-tzvi/view-doc?file=${encodeURIComponent(fileSubpath)}&token=${tokenData.token}`);
+    if (!viewRes.ok) {
+      const errJson = await viewRes.json().catch(() => ({ detail: 'שגיאה בטעינת המסמך' }));
+      throw new Error(errJson.detail || 'שגיאה בטעינת המסמך');
+    }
+
+    const data = await viewRes.json();
+
+    if (data.type === 'html') {
+      content.innerHTML = data.html;
+    } else if (data.type === 'image') {
+      content.innerHTML = `
+        <div class="doc-image-wrapper">
+          <img src="${data.stream_url}" class="doc-preview-img" draggable="false" oncontextmenu="return false;" alt="${escapeHtml(filename)}">
+        </div>
+      `;
+    } else if (data.type === 'pdf') {
+      content.innerHTML = `
+        <iframe src="${data.stream_url}#toolbar=0&navpanes=0" class="doc-preview-pdf" frameborder="0"></iframe>
+      `;
+    } else {
+      content.innerHTML = `<div class="doc-notice">${escapeHtml(data.message || 'אין תצוגה זמינה')}</div>`;
+    }
   } catch (err) {
-    console.error("Error opening document:", err);
-    alert("שגיאה בפתיחת המסמך.");
+    console.error("Error viewing document:", err);
+    content.innerHTML = `
+      <div style="text-align: center; padding: 40px 20px; color: #ef4444;">
+        <div style="font-size: 36px; margin-bottom: 8px;">⚠️</div>
+        <div style="font-weight: 700; font-size: 16px;">שגיאה בפתיחת המסמך באוויר</div>
+        <div style="font-size: 13px; color: #64748b; margin-top: 4px;">${escapeHtml(err.message || 'לא ניתן לטעון את הקובץ')}</div>
+      </div>
+    `;
+  }
+}
+
+function closeDocViewer() {
+  const modal = document.getElementById('docModal');
+  const content = document.getElementById('docContent');
+  if (modal) modal.style.display = 'none';
+  if (content) content.innerHTML = '';
+}
+
+function zoomDoc(delta) {
+  const content = document.getElementById('docContent');
+  if (!content) return;
+  currentDocScale = Math.max(12, Math.min(28, currentDocScale + delta * 2));
+  content.style.fontSize = `${currentDocScale}px`;
+}
+
+function resetDocZoom() {
+  const content = document.getElementById('docContent');
+  if (!content) return;
+  currentDocScale = 17;
+  content.style.fontSize = `${currentDocScale}px`;
+}
+
+function toggleDocFullscreen() {
+  const modal = document.getElementById('docModal');
+  if (!modal) return;
+  const container = modal.querySelector('.doc-modal-container');
+  if (!container) return;
+  if (!document.fullscreenElement) {
+    container.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen().catch(() => {});
   }
 }
 
@@ -464,12 +622,12 @@ function togglePlayPause() {
 }
 
 function seekRelative(seconds) {
-  if (!audio.src || isNaN(audio.duration)) return;
+  if (!audio.src || isNaN(audio.duration) || !isFinite(audio.duration)) return;
   audio.currentTime = Math.max(0, Math.min(audio.duration, audio.currentTime + seconds));
 }
 
 function handleSeek(val) {
-  if (!audio.src || isNaN(audio.duration)) return;
+  if (!audio.src || isNaN(audio.duration) || !isFinite(audio.duration)) return;
   const targetTime = (val / 100) * audio.duration;
   audio.currentTime = targetTime;
 }
@@ -549,9 +707,11 @@ audio.addEventListener('pause', () => {
 });
 
 audio.addEventListener('timeupdate', () => {
-  if (!isNaN(audio.duration) && audio.duration > 0) {
+  if (!isNaN(audio.duration) && isFinite(audio.duration) && audio.duration > 0) {
     const percent = (audio.currentTime / audio.duration) * 100;
     progressSlider.value = percent;
+    currentTimeLabel.textContent = formatTime(audio.currentTime);
+  } else if (!isNaN(audio.currentTime)) {
     currentTimeLabel.textContent = formatTime(audio.currentTime);
   }
 });
@@ -726,22 +886,50 @@ function moveSpatial(direction) {
 
   if (bestIndex !== -1) {
     updateNavSelection(bestIndex);
+    return true;
   } else {
     // If no element in that direction (e.g., in files list or at borders), seek audio
     if (direction === 'right' && audio.src) {
       seekRelative(10);
+      return true;
     } else if (direction === 'left' && audio.src) {
       seekRelative(-10);
+      return true;
     }
+    return false;
   }
 }
 
 document.addEventListener('contextmenu', e => e.preventDefault());
-document.addEventListener('keydown', e => {
-  // Block browser save/source shortcuts
-  if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S' || e.key === 'u' || e.key === 'U')) {
+document.addEventListener('copy', e => {
+  if (docModal && docModal.style.display !== 'none') {
     e.preventDefault();
-    return;
+    showProtectionToast('🔒 העתקת תוכן חסומה להגנה על זכויות יוצרים');
+  }
+});
+document.addEventListener('cut', e => {
+  if (docModal && docModal.style.display !== 'none') {
+    e.preventDefault();
+    showProtectionToast('🔒 העתקת תוכן חסומה להגנה על זכויות יוצרים');
+  }
+});
+
+document.addEventListener('keydown', e => {
+  // Block browser save, print, and source shortcuts
+  if (e.ctrlKey || e.metaKey) {
+    const k = e.key.toLowerCase();
+    if (['s', 'u', 'p'].includes(k)) {
+      e.preventDefault();
+      showProtectionToast('🔒 שמירה והדפסה חסומות להגנה על זכויות יוצרים');
+      return;
+    }
+    if (docModal && docModal.style.display !== 'none') {
+      if (['c', 'a', 'x'].includes(k)) {
+        e.preventDefault();
+        showProtectionToast('🔒 העתקת תוכן חסומה להגנה על זכויות יוצרים');
+        return;
+      }
+    }
   }
 
   const isInputFocused = e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT';
@@ -754,8 +942,18 @@ document.addEventListener('keydown', e => {
     return;
   }
 
-  // Escape: exit search or navigate back
+  // Escape: close modal, exit search or navigate back
   if (e.key === 'Escape') {
+    if (docModal && docModal.style.display !== 'none') {
+      e.preventDefault();
+      closeDocViewer();
+      return;
+    }
+    if (videoModal && videoModal.style.display !== 'none') {
+      e.preventDefault();
+      closeVideoPlayer();
+      return;
+    }
     if (document.activeElement === searchInput) {
       searchInput.value = '';
       handleSearch();
@@ -789,23 +987,19 @@ document.addEventListener('keydown', e => {
 
   // 2D Spatial Grid Navigation: Up / Down / Right / Left
   if (e.code === 'ArrowDown') {
-    e.preventDefault();
-    moveSpatial('down');
+    if (moveSpatial('down')) e.preventDefault();
     return;
   }
   if (e.code === 'ArrowUp') {
-    e.preventDefault();
-    moveSpatial('up');
+    if (moveSpatial('up')) e.preventDefault();
     return;
   }
   if (e.code === 'ArrowRight') {
-    e.preventDefault();
-    moveSpatial('right');
+    if (moveSpatial('right')) e.preventDefault();
     return;
   }
   if (e.code === 'ArrowLeft') {
-    e.preventDefault();
-    moveSpatial('left');
+    if (moveSpatial('left')) e.preventDefault();
     return;
   }
 
@@ -824,15 +1018,6 @@ document.addEventListener('keydown', e => {
     e.preventDefault();
     navigateBack();
     return;
-  }
-
-  // Escape to close video player modal
-  if (e.key === 'Escape') {
-    if (videoModal && videoModal.style.display !== 'none') {
-      e.preventDefault();
-      closeVideoPlayer();
-      return;
-    }
   }
 
   // Spacebar to play/pause audio or video
@@ -854,7 +1039,11 @@ document.addEventListener('keydown', e => {
   }
 });
 
-// Initialize on page load
-document.addEventListener('DOMContentLoaded', () => {
+// Initialize on page load (or immediately if DOM is already ready)
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    loadFolder('');
+  });
+} else {
   loadFolder('');
-});
+}

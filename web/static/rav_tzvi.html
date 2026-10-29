@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;500;600;700;800&display=swap" media="print" onload="this.media='all'">
-  <link rel="stylesheet" href="/static/rav_tzvi.css?v=4.0">
+  <link rel="stylesheet" href="/static/rav_tzvi.css?v=4.5">
 </head>
 <body oncontextmenu="return false;">
 
@@ -109,6 +109,48 @@
     </div>
   </div>
 
+  <!-- Document & Image Viewer Modal Overlay (Protected In-Browser Preview) -->
+  <div class="doc-modal" id="docModal" style="display: none;" oncontextmenu="return false;">
+    <div class="doc-modal-backdrop" onclick="closeDocViewer()"></div>
+    <div class="doc-modal-container">
+      <div class="doc-modal-header">
+        <div class="doc-modal-title">
+          <span class="doc-modal-icon" id="docModalIcon">📄</span>
+          <span id="docModalTitle">צפייה במסמך באוויר</span>
+        </div>
+        <div class="doc-modal-actions">
+          <div class="doc-zoom-controls">
+            <button class="doc-tool-btn" onclick="zoomDoc(-1)" title="הקטן גודל טקסט">A-</button>
+            <button class="doc-tool-btn" onclick="resetDocZoom()" title="גודל רגיל">100%</button>
+            <button class="doc-tool-btn" onclick="zoomDoc(1)" title="הגדל גודל טקסט">A+</button>
+          </div>
+          <button class="doc-tool-btn" onclick="toggleDocFullscreen()" title="מסך מלא (⛶)">⛶</button>
+          <button class="doc-close-btn" onclick="closeDocViewer()" title="סגור (Esc)">✕</button>
+        </div>
+      </div>
+      <div class="doc-wrapper" id="docWrapper">
+        <div class="doc-watermark" aria-hidden="true">
+          <span>מו"ר הרב צבי קוסטינר שליט"א • ישיבת מדברה כעדן • לצפייה בלבד</span>
+        </div>
+        <div class="doc-content unselectable" id="docContent">
+          <!-- Document content rendered dynamically -->
+        </div>
+      </div>
+      <div class="doc-modal-footer">
+        <div class="doc-security-status">
+          <span class="doc-lock-icon">🔒</span>
+          <span>מוגן בזכויות יוצרים • נפתח באוויר בלבד • העתקה, הדפסה והורדה חסומות</span>
+        </div>
+        <button class="doc-bottom-close" onclick="closeDocViewer()">סגור מסמך</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast for blocked actions (copy/print) -->
+  <div class="protection-toast" id="protectionToast" style="display: none;">
+    🔒 העתקה, שמירה והדפסה חסומות להגנה על זכויות יוצרים
+  </div>
+
   <!-- Hidden native audio element with nodownload protection -->
   <audio id="audioPlayer" preload="none" controlslist="nodownload" style="display: none;"></audio>
 
@@ -166,6 +208,6 @@
     </div>
   </footer>
 
-  <script src="/static/rav_tzvi.js?v=4.3"></script>
+  <script src="/static/rav_tzvi.js?v=4.6"></script>
 </body>
 </html>

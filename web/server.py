@@ -6,6 +6,10 @@ import hashlib
 import threading
 import subprocess
 import mimetypes
+import zipfile
+import html
+import xml.etree.ElementTree as ET
+from urllib.parse import quote
 from pathlib import Path
 import secrets
 from datetime import datetime, timedelta
@@ -218,17 +222,17 @@ def serve_static_audio_range(file_path: Path, mime_type: str, request: Optional[
     range_header = request.headers.get("range") if request else None
 
     if not range_header:
-        def iter_full():
-            with open(file_path, "rb") as f:
-                while chunk := f.read(128 * 1024):
-                    yield chunk
         headers = {
             "Accept-Ranges": "bytes",
             "Content-Length": str(file_size),
             "Content-Type": mime_type,
             "Cache-Control": "private, max-age=86400"
         }
-        return StreamingResponse(iter_full(), status_code=200, headers=headers)
+        if file_size <= 8 * 1024 * 1024:
+            with open(file_path, "rb") as f:
+                data = f.read()
+            return Response(content=data, status_code=200, headers=headers)
+        return FileResponse(path=file_path, media_type=mime_type, filename=file_path.name, headers=headers)
 
     try:
         byte_range = range_header.replace("bytes=", "").split("-")
@@ -245,6 +249,23 @@ def serve_static_audio_range(file_path: Path, mime_type: str, request: Optional[
 
         length = end - start + 1
 
+        headers = {
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(length),
+            "Content-Type": mime_type,
+            "Cache-Control": "private, max-age=86400"
+        }
+
+        # For slices <= 8MB (covers initial HTML5 player probes and normal chunks),
+        # return direct raw byte Response so browsers receive exact Content-Length without chunked encoding,
+        # ensuring audio.duration is accurately detected by Chrome/Safari/Edge.
+        if length <= 8 * 1024 * 1024:
+            with open(file_path, "rb") as f:
+                f.seek(start)
+                data = f.read(length)
+            return Response(content=data, status_code=206, headers=headers)
+
         def iter_range():
             with open(file_path, "rb") as f:
                 f.seek(start)
@@ -258,13 +279,6 @@ def serve_static_audio_range(file_path: Path, mime_type: str, request: Optional[
                     remaining -= len(data)
                     yield data
 
-        headers = {
-            "Content-Range": f"bytes {start}-{end}/{file_size}",
-            "Accept-Ranges": "bytes",
-            "Content-Length": str(length),
-            "Content-Type": mime_type,
-            "Cache-Control": "private, max-age=86400"
-        }
         return StreamingResponse(iter_range(), status_code=206, headers=headers)
     except HTTPException:
         raise
@@ -901,7 +915,7 @@ def find_noam_folder(base_mount: Path) -> Optional[Path]:
 
 _RAV_TZVI_SOURCES_CACHE = None
 _RAV_TZVI_CACHE_TIME = 0.0
-RAV_TZVI_CACHE_TTL = 30.0  # Cache sources for 30s to prevent constant SMB share re-scanning
+RAV_TZVI_CACHE_TTL = 600.0  # Cache sources for 10 minutes to prevent constant SMB share re-scanning
 
 _RAV_TZVI_BROWSE_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 RAV_TZVI_BROWSE_CACHE_TTL = 5.0
@@ -940,13 +954,6 @@ def get_rav_tzvi_sources() -> Dict[str, Dict[str, Any]]:
     }
 
     if is_mounted and base_mount.exists() and base_mount.is_dir():
-        # Check if base_mount itself contains Rav Tzvi directly
-        direct_rt = find_rav_tzvi_in_folder(base_mount)
-        if direct_rt and direct_rt != base_mount:
-            sources["current_direct"] = {
-                "display_name": "שיעורים שוטפים (ישיר)",
-                "path": direct_rt
-            }
 
         # 1. Dynamically scan all semester and year folders in base_mount
         try:
@@ -1058,11 +1065,17 @@ def browse_rav_tzvi(subpath: str = Query("", description="Relative folder subpat
             subfolder_count = 0
             if p.exists() and p.is_dir():
                 try:
-                    for f in p.iterdir():
-                        if f.is_file() and f.suffix.lower() in config.SUPPORTED_MEDIA_EXTENSIONS:
-                            audio_count += 1
-                        elif f.is_dir() and not f.name.startswith("."):
-                            subfolder_count += 1
+                    with os.scandir(str(p)) as it:
+                        for entry in it:
+                            try:
+                                if entry.is_file(follow_symlinks=False):
+                                    ext = os.path.splitext(entry.name)[1].lower()
+                                    if ext in config.SUPPORTED_MEDIA_EXTENSIONS:
+                                        audio_count += 1
+                                elif entry.is_dir(follow_symlinks=False) and not entry.name.startswith("."):
+                                    subfolder_count += 1
+                            except OSError:
+                                continue
                 except Exception:
                     pass
             folders.append({
@@ -1115,11 +1128,17 @@ def browse_rav_tzvi(subpath: str = Query("", description="Relative folder subpat
             audio_count = 0
             subfolder_count = 0
             try:
-                for f in item.iterdir():
-                    if f.is_file() and f.suffix.lower() in config.SUPPORTED_MEDIA_EXTENSIONS:
-                        audio_count += 1
-                    elif f.is_dir() and not f.name.startswith("."):
-                        subfolder_count += 1
+                with os.scandir(str(item)) as it:
+                    for entry in it:
+                        try:
+                            if entry.is_file(follow_symlinks=False):
+                                ext = os.path.splitext(entry.name)[1].lower()
+                                if ext in config.SUPPORTED_MEDIA_EXTENSIONS:
+                                    audio_count += 1
+                            elif entry.is_dir(follow_symlinks=False) and not entry.name.startswith("."):
+                                subfolder_count += 1
+                        except OSError:
+                            continue
             except Exception:
                 pass
             folders.append({
@@ -1129,10 +1148,13 @@ def browse_rav_tzvi(subpath: str = Query("", description="Relative folder subpat
                 "subfolder_count": subfolder_count
             })
         elif item.is_file():
+            if item.name.startswith("~$"):
+                continue
             ext = item.suffix.lower()
             if ext in config.SUPPORTED_MEDIA_EXTENSIONS:
                 is_video = ext in config.SUPPORTED_VIDEO_EXTENSIONS
                 is_doc = hasattr(config, "SUPPORTED_DOCUMENT_EXTENSIONS") and ext in config.SUPPORTED_DOCUMENT_EXTENSIONS
+                is_image = hasattr(config, "SUPPORTED_IMAGE_EXTENSIONS") and ext in config.SUPPORTED_IMAGE_EXTENSIONS
                 try:
                     stat = item.stat()
                     files.append({
@@ -1141,7 +1163,8 @@ def browse_rav_tzvi(subpath: str = Query("", description="Relative folder subpat
                         "size_mb": round(stat.st_size / (1024 * 1024), 2),
                         "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
                         "is_video": is_video,
-                        "is_doc": is_doc
+                        "is_doc": is_doc,
+                        "is_image": is_image
                     })
                 except Exception:
                     pass
@@ -1155,7 +1178,6 @@ def browse_rav_tzvi(subpath: str = Query("", description="Relative folder subpat
         "total_items": len(folders) + len(files),
         "network_status": network_status
     }
-    return JSONResponse(result, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
 def get_rav_tzvi_catalog() -> List[Dict[str, Any]]:
     """
@@ -1204,6 +1226,8 @@ def get_rav_tzvi_catalog() -> List[Dict[str, Any]]:
                     ext = os.path.splitext(f)[1].lower()
                     if ext in config.SUPPORTED_MEDIA_EXTENSIONS:
                         is_video = ext in config.SUPPORTED_VIDEO_EXTENSIONS
+                        is_doc = hasattr(config, "SUPPORTED_DOCUMENT_EXTENSIONS") and ext in config.SUPPORTED_DOCUMENT_EXTENSIONS
+                        is_image = hasattr(config, "SUPPORTED_IMAGE_EXTENSIONS") and ext in config.SUPPORTED_IMAGE_EXTENSIONS
                         f_rel = f"{rel}/{f}".strip("/")
                         item_subpath = f"{root_key}/{f_rel}"
                         parent_display = f"{display_root} / {rel}" if rel else display_root
@@ -1223,7 +1247,9 @@ def get_rav_tzvi_catalog() -> List[Dict[str, Any]]:
                             "folder_path": parent_display,
                             "size_mb": size_mb,
                             "modified_at": mtime,
-                            "is_video": is_video
+                            "is_video": is_video,
+                            "is_doc": is_doc,
+                            "is_image": is_image
                         })
         except Exception as e:
             print(f"[Rav Tzvi Catalog Error in {root_key}]: {e}")
@@ -1273,7 +1299,9 @@ def search_rav_tzvi(q: str = Query("", description="Search query across all fold
                     "folder_path": item["folder_path"],
                     "size_mb": item["size_mb"],
                     "modified_at": item["modified_at"],
-                    "is_video": item.get("is_video", False)
+                    "is_video": item.get("is_video", False),
+                    "is_doc": item.get("is_doc", False),
+                    "is_image": item.get("is_image", False)
                 })
             if len(folders) + len(files) >= 150:
                 break
@@ -1286,6 +1314,290 @@ def search_rav_tzvi(q: str = Query("", description="Search query across all fold
     }
     _RAV_TZVI_SEARCH_CACHE[query] = (now, result)
     return JSONResponse(result, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
+
+def docx_to_html(file_path: Path) -> str:
+    """
+    Parses a DOCX file and returns structured HTML with full Hebrew RTL formatting,
+    headings, paragraphs, lists, bold, italic, underline, and tables.
+    Works with standard library zipfile and xml.etree without external dependencies.
+    """
+    # If mammoth is available, try it first
+    try:
+        import mammoth
+        with open(file_path, "rb") as docx_file:
+            result = mammoth.convert_to_html(docx_file)
+            if result.value and len(result.value.strip()) > 0:
+                return f"<div class='doc-body-inner'>{result.value}</div>"
+    except Exception:
+        pass
+
+    W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+    def get_tag(elem) -> str:
+        tag = elem.tag
+        if tag.startswith(f"{{{W_NS}}}"):
+            return tag[len(f"{{{W_NS}}}"):]
+        return tag.split("}")[-1] if "}" in tag else tag
+
+    def parse_run(r_elem) -> str:
+        is_bold = False
+        is_italic = False
+        is_underline = False
+        
+        r_pr = r_elem.find(f"{{{W_NS}}}rPr")
+        if r_pr is not None:
+            for child in r_pr:
+                ctag = get_tag(child)
+                cval = child.attrib.get(f"{{{W_NS}}}val", "1").lower()
+                if cval not in ("0", "false"):
+                    if ctag == "b":
+                        is_bold = True
+                    elif ctag == "i":
+                        is_italic = True
+                    elif ctag == "u":
+                        is_underline = True
+
+        run_text = []
+        for child in r_elem:
+            ctag = get_tag(child)
+            if ctag == "t":
+                t = child.text or ""
+                escaped = html.escape(t)
+                run_text.append(escaped)
+            elif ctag == "br":
+                run_text.append("<br>")
+            elif ctag == "tab":
+                run_text.append("&emsp;")
+
+        res = "".join(run_text)
+        if not res:
+            return ""
+        if is_bold:
+            res = f"<strong>{res}</strong>"
+        if is_italic:
+            res = f"<em>{res}</em>"
+        if is_underline:
+            res = f"<u>{res}</u>"
+        return res
+
+    def parse_p(p_elem) -> str:
+        align = "right"
+        is_heading = False
+        heading_lvl = 1
+        is_bullet = False
+
+        p_pr = p_elem.find(f"{{{W_NS}}}pPr")
+        if p_pr is not None:
+            jc = p_pr.find(f"{{{W_NS}}}jc")
+            if jc is not None:
+                val = jc.attrib.get(f"{{{W_NS}}}val", "").lower()
+                if val in ("center", "centre"):
+                    align = "center"
+                elif val in ("left", "start"):
+                    align = "left"
+                elif val in ("right", "end"):
+                    align = "right"
+                elif val == "both":
+                    align = "justify"
+
+            p_style = p_pr.find(f"{{{W_NS}}}pStyle")
+            if p_style is not None:
+                sval = p_style.attrib.get(f"{{{W_NS}}}val", "").lower()
+                if "heading1" in sval or "title" in sval:
+                    is_heading = True
+                    heading_lvl = 1
+                elif "heading2" in sval:
+                    is_heading = True
+                    heading_lvl = 2
+                elif "heading3" in sval:
+                    is_heading = True
+                    heading_lvl = 3
+                elif any(c in sval for c in ["heading", "כותרת"]):
+                    is_heading = True
+                    heading_lvl = 2
+
+            num_pr = p_pr.find(f"{{{W_NS}}}numPr")
+            if num_pr is not None:
+                is_bullet = True
+
+        runs_html = []
+        for child in p_elem:
+            if get_tag(child) == "r":
+                runs_html.append(parse_run(child))
+
+        line = "".join(runs_html).strip()
+        if not line:
+            return "<p class='doc-empty-p'>&nbsp;</p>"
+
+        style_attr = f"style='text-align: {align};'"
+        if is_heading:
+            return f"<h{heading_lvl} class='doc-heading' {style_attr}>{line}</h{heading_lvl}>"
+        elif is_bullet:
+            return f"<div class='doc-list-item' {style_attr}><span class='doc-bullet'>•</span> {line}</div>"
+        else:
+            return f"<p class='doc-p' {style_attr}>{line}</p>"
+
+    def parse_tbl(tbl_elem) -> str:
+        rows = []
+        for tr in tbl_elem.findall(f"{{{W_NS}}}tr"):
+            cells = []
+            for tc in tr.findall(f"{{{W_NS}}}tc"):
+                cell_parts = []
+                for p in tc.findall(f"{{{W_NS}}}p"):
+                    p_res = parse_p(p)
+                    if p_res:
+                        cell_parts.append(p_res)
+                cells.append(f"<td class='doc-td'>{''.join(cell_parts) or '&nbsp;'}</td>")
+            if cells:
+                rows.append(f"<tr class='doc-tr'>{''.join(cells)}</tr>")
+        if not rows:
+            return ""
+        return f"<table class='doc-table'><tbody>{''.join(rows)}</tbody></table>"
+
+    try:
+        if not zipfile.is_zipfile(file_path):
+            return "<p style='color: #ef4444;'>הקובץ אינו קובץ DOCX תקין או שנפגם.</p>"
+
+        with zipfile.ZipFile(file_path, "r") as docx_zip:
+            if "word/document.xml" not in docx_zip.namelist():
+                return "<p style='color: #ef4444;'>לא נמצא תוכן מסמך בקובץ הוורד.</p>"
+            
+            xml_data = docx_zip.read("word/document.xml")
+            root = ET.fromstring(xml_data)
+            body = root.find(f"{{{W_NS}}}body")
+            if body is None:
+                return "<p>(מסמך ריק)</p>"
+
+            output = []
+            for child in body:
+                ctag = get_tag(child)
+                if ctag == "p":
+                    p_res = parse_p(child)
+                    if p_res:
+                        output.append(p_res)
+                elif ctag == "tbl":
+                    tbl_res = parse_tbl(child)
+                    if tbl_res:
+                        output.append(tbl_res)
+
+            return f"<div class='doc-body-inner'>{''.join(output)}</div>" if output else "<p>(מסמך ריק מתוכן)</p>"
+    except Exception as e:
+        return f"<p style='color: #ef4444;'>שגיאה בקריאת מסמך DOCX: {html.escape(str(e))}</p>"
+
+def extract_text_from_doc(file_path: Path) -> str:
+    """Extracts readable Hebrew and Unicode text from legacy .doc binary files."""
+    try:
+        data = file_path.read_bytes()
+        extracted_lines = []
+        
+        # Try UTF-16LE decoding (standard for Microsoft Word binary strings)
+        try:
+            u16 = data.decode("utf-16le", errors="ignore")
+            lines = [l.strip() for l in re.split(r'[\r\n\x00-\x08\x0b\x0c\x0e-\x1f]+', u16) if len(l.strip()) >= 3]
+            hebrew_lines = [l for l in lines if any('\u0590' <= c <= '\u05FF' for c in l)]
+            if len(hebrew_lines) >= 3:
+                extracted_lines = hebrew_lines
+        except Exception:
+            pass
+
+        if not extracted_lines:
+            # Try Windows-1255 decoding
+            try:
+                cp = data.decode("cp1255", errors="ignore")
+                lines = [l.strip() for l in re.split(r'[\r\n\x00-\x08\x0b\x0c\x0e-\x1f]+', cp) if len(l.strip()) >= 3]
+                hebrew_lines = [l for l in lines if any('\u0590' <= c <= '\u05FF' for c in l)]
+                if len(hebrew_lines) >= 3:
+                    extracted_lines = hebrew_lines
+            except Exception:
+                pass
+
+        if extracted_lines:
+            out = ["<div class='doc-legacy-notice'><small>📄 תצוגת טקסט מחולצת מקובץ Word ישן (.doc)</small></div>"]
+            for l in extracted_lines:
+                out.append(f"<p class='doc-p'>{html.escape(l)}</p>")
+            return f"<div class='doc-body-inner'>{''.join(out)}</div>"
+        return "<p class='doc-notice'>קובץ Word בתבנית ישנה (.doc). מומלץ להמיר ל-DOCX לתצוגה מעוצבת מלאה.</p>"
+    except Exception as e:
+        return f"<p style='color: #ef4444;'>לא ניתן לפענח מסמך: {html.escape(str(e))}</p>"
+
+def text_to_html(file_path: Path) -> str:
+    for enc in ["utf-8-sig", "utf-8", "cp1255", "windows-1255", "iso-8859-8"]:
+        try:
+            txt = file_path.read_text(encoding=enc)
+            lines = txt.splitlines()
+            out = [f"<p class='doc-p'>{html.escape(l) if l.strip() else '&nbsp;'}</p>" for l in lines]
+            return f"<div class='doc-body-inner'>{''.join(out)}</div>"
+        except Exception:
+            continue
+    return "<p style='color: #ef4444;'>לא ניתן לקרוא את קובץ הטקסט.</p>"
+
+@app.get("/api/rav-tzvi/view-doc")
+def view_document_rav_tzvi(file: str = Query(..., description="Relative file subpath"), token: str = Query(None), request: Request = None):
+    """
+    Online in-browser viewer for documents (DOCX, DOC, TXT, PDF, Images).
+    Renders content in-memory without downloading the raw file to the user's computer.
+    """
+    if not token or token not in STREAMING_TOKENS:
+        raise HTTPException(status_code=403, detail="Invalid or missing stream token")
+        
+    token_data = STREAMING_TOKENS[token]
+    if token_data["file"] != file or token_data["expires"] < datetime.now():
+        STREAMING_TOKENS.pop(token, None)
+        raise HTTPException(status_code=403, detail="Token expired or mismatched")
+        
+    token_data["expires"] = datetime.now() + timedelta(hours=8)
+
+    file_path, _, _ = resolve_rav_tzvi_path(file)
+    if not file_path or not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Document file not found")
+
+    ext = file_path.suffix.lower()
+    
+    if ext == ".docx":
+        html_content = docx_to_html(file_path)
+        return JSONResponse({
+            "status": "ok",
+            "type": "html",
+            "filename": file_path.name,
+            "html": html_content
+        })
+    elif ext == ".doc":
+        html_content = extract_text_from_doc(file_path)
+        return JSONResponse({
+            "status": "ok",
+            "type": "html",
+            "filename": file_path.name,
+            "html": html_content
+        })
+    elif ext == ".txt":
+        html_content = text_to_html(file_path)
+        return JSONResponse({
+            "status": "ok",
+            "type": "html",
+            "filename": file_path.name,
+            "html": html_content
+        })
+    elif ext == ".pdf":
+        return JSONResponse({
+            "status": "ok",
+            "type": "pdf",
+            "filename": file_path.name,
+            "stream_url": f"/api/rav-tzvi/stream?file={quote(file)}&token={token}"
+        })
+    elif ext in getattr(config, "SUPPORTED_IMAGE_EXTENSIONS", set()):
+        return JSONResponse({
+            "status": "ok",
+            "type": "image",
+            "filename": file_path.name,
+            "stream_url": f"/api/rav-tzvi/stream?file={quote(file)}&token={token}"
+        })
+    else:
+        return JSONResponse({
+            "status": "ok",
+            "type": "html",
+            "filename": file_path.name,
+            "html": f"<p class='doc-notice'>קובץ מסוג {html.escape(ext)} זמין לצפייה באוויר. לתצוגה מעוצבת מושלמת יש להעלות בפורמט DOCX או PDF.</p>"
+        })
 
 @app.get("/api/rav-tzvi/stream")
 def stream_rav_tzvi(file: str = Query(..., description="Relative file subpath"), token: str = Query(None), request: Request = None):
@@ -1304,13 +1616,31 @@ def stream_rav_tzvi(file: str = Query(..., description="Relative file subpath"),
     # Slide token expiration forward on active listening by 8 hours
     token_data["expires"] = datetime.now() + timedelta(hours=8)
 
-    dest = request.headers.get("Sec-Fetch-Dest", "")
-    if dest and dest not in ("audio", "video", "empty", "document"):
-        raise HTTPException(status_code=403, detail="Direct downloading is blocked")
-
     file_path, _, _ = resolve_rav_tzvi_path(file)
     if not file_path or not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="Media file not found")
+
+    ext = file_path.suffix.lower()
+
+    # Explicitly block raw downloading of Word documents to prevent copying/downloading
+    if ext in (".docx", ".doc"):
+        raise HTTPException(
+            status_code=403,
+            detail="הורדת קובץ Word חסומה. המסמך זמין לצפייה באוויר בלבד דרך האתר."
+        )
+
+    is_image = ext in getattr(config, "SUPPORTED_IMAGE_EXTENSIONS", set())
+    is_doc = ext in getattr(config, "SUPPORTED_DOCUMENT_EXTENSIONS", set())
+    if is_image or is_doc:
+        mime, _ = mimetypes.guess_type(str(file_path))
+        mime = mime or "application/octet-stream"
+        inline = is_image or ext in (".pdf", ".txt")
+        return FileResponse(
+            path=file_path,
+            media_type=mime,
+            filename=file_path.name,
+            content_disposition_type="inline" if inline else "attachment",
+        )
 
     return stream_audio_file(file_path, request)
 

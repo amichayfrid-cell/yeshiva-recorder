@@ -173,16 +173,18 @@ function updateProgress(index) {
     const seek = document.getElementById(`seek-${index}`);
     const timeDisplay = document.getElementById(`time-${index}`);
 
-    if (audio && audio.duration) {
+    if (audio && audio.duration && isFinite(audio.duration)) {
         seek.value = (audio.currentTime / audio.duration) * 100;
         timeDisplay.innerText = `${formatTime(audio.currentTime)} / ${formatTime(audio.duration)}`;
+    } else if (audio && !isNaN(audio.currentTime)) {
+        timeDisplay.innerText = `${formatTime(audio.currentTime)} / --:--`;
     }
 }
 
 function initAudioDuration(index) {
     const audio = document.getElementById(`audio-${index}`);
     const timeDisplay = document.getElementById(`time-${index}`);
-    if (audio && audio.duration) {
+    if (audio && audio.duration && isFinite(audio.duration)) {
         timeDisplay.innerText = `00:00 / ${formatTime(audio.duration)}`;
     }
 }
@@ -190,7 +192,7 @@ function initAudioDuration(index) {
 function seekAudio(index) {
     const audio = document.getElementById(`audio-${index}`);
     const seek = document.getElementById(`seek-${index}`);
-    if (audio && audio.duration) {
+    if (audio && audio.duration && isFinite(audio.duration)) {
         audio.currentTime = (seek.value / 100) * audio.duration;
     }
 }
@@ -201,6 +203,7 @@ function onAudioEnded(index) {
 }
 
 function formatTime(seconds) {
+    if (isNaN(seconds) || !isFinite(seconds)) return "00:00";
     const min = Math.floor(seconds / 60);
     const sec = Math.floor(seconds % 60);
     return `${min < 10 ? '0' : ''}${min}:${sec < 10 ? '0' : ''}${sec}`;

@@ -17,7 +17,10 @@ $FILES_TO_DEPLOY = @(
     "web/static/style.css",
     "web/templates/admin.html",
     "web/templates/student.html",
-    "web/templates/login.html"
+    "web/templates/login.html",
+    "core/usb_ingest.py",
+    "core/file_manager.py",
+    "core/watcher.py"
 )
 
 tar -czf deploy_patch.tar.gz $FILES_TO_DEPLOY
@@ -38,8 +41,8 @@ if ($LASTEXITCODE -ne 0) {
 
 Remove-Item deploy_patch.tar.gz -ErrorAction SilentlyContinue
 
-Write-Host "==> [3/3] Extracting on server and restarting web service..." -ForegroundColor Cyan
-ssh -t $SERVER "cd $REMOTE_DIR && tar -xzf deploy_patch.tar.gz && rm -f deploy_patch.tar.gz && sudo systemctl restart web.service"
+Write-Host "==> [3/3] Extracting on server and restarting services..." -ForegroundColor Cyan
+ssh -t $SERVER "cd $REMOTE_DIR && tar -xzf deploy_patch.tar.gz && rm -f deploy_patch.tar.gz && sudo systemctl restart web.service && (sudo systemctl restart recorder.service 2>/dev/null || true)"
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "==========================================" -ForegroundColor Green
