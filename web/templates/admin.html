@@ -10,7 +10,7 @@
 
     <title>מערכת מיון שיעורי הישיבה - ישיבת מצפה רמון</title>
 
-    <link rel="stylesheet" href="/static/style.css?v=3.2">
+    <link rel="stylesheet" href="/static/style.css?v=3.3">
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
 
@@ -89,8 +89,8 @@
                 <div class="breadcrumbs" id="pending-breadcrumbs">
                     <!-- Breadcrumbs -->
                 </div>
-                <button class="btn btn-sm btn-outline" id="btn-show-all-folders" onclick="selectPendingFolder('all')">
-                    📁 הצג את כל התיקיות
+                <button class="btn btn-sm btn-outline btn-close-folder" id="btn-close-folder" onclick="selectPendingFolder(null)" title="סגור הכל">
+                    ✕ סגור הכל
                 </button>
             </div>
 
@@ -320,7 +320,7 @@
 
     <script src="/static/security_guard.js"></script>
 
-    <script src="/static/app.js?v=3.4"></script>
+    <script src="/static/app.js?v=3.6"></script>
 
 </body>
 

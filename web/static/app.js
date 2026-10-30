@@ -1,6 +1,6 @@
 // State
 let pendingLessons = [];
-let currentPendingSource = 'all';
+let currentPendingSource = null;
 let allNotes = [];
 let activeCardIndex = null;
 let currentFolderData = null;
@@ -95,7 +95,7 @@ function renderPendingFolders() {
 
 function selectPendingFolder(source) {
     if (currentPendingSource === source) {
-        currentPendingSource = 'all';
+        currentPendingSource = null;
     } else {
         currentPendingSource = source;
     }
@@ -106,32 +106,34 @@ function selectPendingFolder(source) {
 function renderFolderBar(uploadCount, recorderCount) {
     const folderBar = document.getElementById("current-folder-bar");
     const breadcrumbs = document.getElementById("pending-breadcrumbs");
-    const btnAll = document.getElementById("btn-show-all-folders");
+    const btnClose = document.getElementById("btn-close-folder") || document.getElementById("btn-show-all-folders");
     if (!folderBar || !breadcrumbs) return;
+
+    if (!currentPendingSource) {
+        folderBar.style.display = "none";
+        return;
+    }
 
     folderBar.style.display = "flex";
 
-    if (currentPendingSource === 'all') {
+    if (currentPendingSource === 'upload') {
         breadcrumbs.innerHTML = `
-            <span>📁 כל התיקיות</span>
-            <span class="breadcrumb-sep">•</span>
-            <span style="color: var(--text-muted); font-size: 0.85rem;">סה"כ ${pendingLessons.length} שיעורים</span>
-        `;
-        if (btnAll) btnAll.style.display = "none";
-    } else if (currentPendingSource === 'upload') {
-        breadcrumbs.innerHTML = `
-            <span class="breadcrumb-crumb" onclick="selectPendingFolder('all')">📁 כל התיקיות</span>
+            <span class="breadcrumb-crumb" onclick="selectPendingFolder(null)" title="חזור לכל התיקיות">📁 תיקיות</span>
             <span class="breadcrumb-sep">❮</span>
             <span>📤 העלאת שיעורים (${uploadCount} שיעורים)</span>
         `;
-        if (btnAll) btnAll.style.display = "inline-flex";
     } else if (currentPendingSource === 'recorder') {
         breadcrumbs.innerHTML = `
-            <span class="breadcrumb-crumb" onclick="selectPendingFolder('all')">📁 כל התיקיות</span>
+            <span class="breadcrumb-crumb" onclick="selectPendingFolder(null)" title="חזור לכל התיקיות">📁 תיקיות</span>
             <span class="breadcrumb-sep">❮</span>
             <span>🎙️ שיעורים למיון - מקלט שמע (${recorderCount} שיעורים)</span>
         `;
-        if (btnAll) btnAll.style.display = "inline-flex";
+    }
+
+    if (btnClose) {
+        btnClose.style.display = "inline-flex";
+        btnClose.innerHTML = "✕ סגור הכל";
+        btnClose.onclick = () => selectPendingFolder(null);
     }
 }
 
@@ -149,12 +151,19 @@ function renderPendingLessons() {
         return;
     }
 
-    let filtered = pendingLessons;
-    if (currentPendingSource === 'upload') {
-        filtered = pendingLessons.filter(l => l.source === 'upload');
-    } else if (currentPendingSource === 'recorder') {
-        filtered = pendingLessons.filter(l => l.source !== 'upload');
+    // By default, do not display lessons until user clicks into a folder
+    if (!currentPendingSource) {
+        listContainer.innerHTML = `
+            <div class="empty-state" style="padding: 2.75rem 1.5rem; background: #ffffff; border: 1px dashed var(--border); border-radius: var(--radius); box-shadow: var(--shadow);">
+                <div class="icon" style="font-size: 2.8rem; margin-bottom: 0.75rem;">📂</div>
+                <h3 style="font-size: 1.2rem; color: var(--text-main); margin-bottom: 0.4rem;">בחר תיקייה כדי להתחיל במיון השיעורים</h3>
+                <p style="color: var(--text-muted); font-size: 0.95rem; margin: 0 auto; max-width: 480px; line-height: 1.5;">לחץ על אחת התיקיות למעלה (<strong>העלאת שיעורים</strong> או <strong>שיעורים למיון</strong>) כדי להיכנס ולסווג את השיעורים הממתינים בה.</p>
+            </div>
+        `;
+        return;
     }
+
+    let filtered = pendingLessons.filter(l => currentPendingSource === 'upload' ? l.source === 'upload' : l.source !== 'upload');
 
     if (filtered.length === 0) {
         const folderTitle = currentPendingSource === 'upload' ? 'העלאת שיעורים' : 'שיעורים למיון (מקלט שמע)';
@@ -164,8 +173,8 @@ function renderPendingLessons() {
                 <h3>אין שיעורים בתיקיית '${folderTitle}'</h3>
                 <p>כל השיעורים בתיקייה זו מוינו בהצלחה.</p>
                 <div style="margin-top: 1rem;">
-                    <button class="btn btn-outline" onclick="selectPendingFolder('all')">
-                        📁 חזור לכל התיקיות
+                    <button class="btn btn-outline" onclick="selectPendingFolder(null)">
+                        ✕ סגור הכל
                     </button>
                 </div>
             </div>

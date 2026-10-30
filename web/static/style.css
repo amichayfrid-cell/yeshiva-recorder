@@ -338,6 +338,25 @@ body {
     text-decoration: underline;
 }
 
+
+.btn-close-folder {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-weight: 500;
+    color: #475569;
+    border-color: #cbd5e1;
+    background: #ffffff;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.btn-close-folder:hover {
+    color: #dc2626 !important;
+    border-color: #fca5a5 !important;
+    background: #fef2f2 !important;
+}
+
 .current-folder-bar .breadcrumb-sep {
     color: var(--text-muted);
     font-weight: 400;
