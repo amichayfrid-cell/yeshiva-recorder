@@ -1,172 +1,328 @@
 <!DOCTYPE html>
+
 <html lang="he" dir="rtl">
+
 <head>
+
     <meta charset="UTF-8">
+
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
     <title>מערכת מיון שיעורי הישיבה - ישיבת מצפה רמון</title>
-    <link rel="stylesheet" href="/static/style.css?v=3.0">
+
+    <link rel="stylesheet" href="/static/style.css?v=3.2">
+
     <link rel="preconnect" href="https://fonts.googleapis.com">
+
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
     <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+
 </head>
+
 <body>
+
     <nav class="navbar">
+
         <div class="nav-brand">
+
             <span style="font-size: 1.5rem;">🎙️</span>
+
             <h1>מערכת מיון שיעורי הישיבה</h1>
+
         </div>
+
         <div class="nav-actions">
+
             <div class="nav-tabs">
+
                 <button class="nav-tab active" id="tab-pending-btn" onclick="switchTab('pending')">
+
                     📁 שיעורים למיון (<span id="pending-count">0</span>)
+
                 </button>
+
                 <button class="nav-tab" id="tab-notes-btn" onclick="switchTab('notes')">
+
                     🔔 הערות תלמידים (<span id="notes-count">0</span>)
+
                 </button>
+
             </div>
+
             <button class="btn btn-outline" onclick="refreshAll()">🔄 רענן</button>
+
             <a href="/logout" class="btn btn-outline">יציאה</a>
+
         </div>
+
     </nav>
 
     <div class="container">
+
         <!-- View 1: Pending Sorting Queue -->
+
         <div id="view-pending">
+
             <div class="header-banner">
+
                 <div>
+
                     <h2>שיעורים הממתינים למיון וסיווג</h2>
+
                 </div>
+
+            </div>
+
+            <!-- Folders Section (like Rav Tzvi) -->
+            <div id="pending-folders-section" class="pending-folders-section" style="display: none;">
+                <div class="section-title">
+                    <span>📁</span>
+                    <span>תיקיות</span>
+                </div>
+                <div class="folders-grid" id="pending-folders-grid">
+                    <!-- Populated dynamically via app.js -->
+                </div>
+            </div>
+
+            <div class="current-folder-bar" id="current-folder-bar" style="display: none;">
+                <div class="breadcrumbs" id="pending-breadcrumbs">
+                    <!-- Breadcrumbs -->
+                </div>
+                <button class="btn btn-sm btn-outline" id="btn-show-all-folders" onclick="selectPendingFolder('all')">
+                    📁 הצג את כל התיקיות
+                </button>
             </div>
 
             <div id="lessons-list" class="lessons-grid">
+
                 <!-- Dynamically populated via app.js -->
+
                 <div class="empty-state">
+
                     <div class="icon">⏳</div>
+
                     <h3>טוען שיעורים...</h3>
+
                 </div>
+
             </div>
+
         </div>
 
         <!-- View 2: All Notes -->
+
         <div id="view-notes" style="display: none;">
+
             <div class="header-banner">
+
                 <div>
+
                     <h2>הערות תלמידים על שיעורים</h2>
+
                 </div>
+
             </div>
 
             <div id="notes-list" class="lessons-grid">
+
                 <!-- Dynamically populated via app.js -->
+
             </div>
+
         </div>
+
     </div>
 
     <!-- Modal for Edit Lesson from Notes -->
+
     <div id="edit-lesson-modal" class="modal-overlay" style="z-index: 1000;">
+
         <div class="modal-box" style="max-width: 620px; width: 95%;">
+
             <div class="modal-header">
+
                 <h3>✏️ עריכת שיעור ופתרון פנייה</h3>
+
                 <button class="btn-icon" onclick="closeEditLessonModal()">✕</button>
+
             </div>
-            
+
             <div class="modal-body" style="padding: 1.25rem 1.5rem;">
+
                 <div id="edit-modal-note-banner" class="student-note-banner" style="margin-bottom: 1rem;">
+
                     <span class="icon">🔔</span>
+
                     <div>
+
                         <div class="note-content"><strong id="edit-modal-student-name"></strong>: <span id="edit-modal-note-desc"></span></div>
+
                         <div class="note-meta" id="edit-modal-note-meta"></div>
+
                     </div>
+
                 </div>
 
                 <!-- Mini Audio Player -->
+
                 <div class="player-container" style="margin-bottom: 1.25rem;">
+
                     <div class="audio-controls">
+
                         <button class="btn-icon btn-skip" onclick="skipAudio('edit', -10)" title="10 שניות אחורה"><span>⏪</span><span>10</span></button>
+
                         <button class="btn-icon btn-play" id="play-btn-edit" onclick="togglePlay('edit')">▶</button>
+
                         <button class="btn-icon btn-skip" onclick="skipAudio('edit', 10)" title="10 שניות קדימה"><span>10</span><span>⏩</span></button>
+
                     </div>
+
                     <div class="progress-wrap">
+
                         <input type="range" class="seek-bar" id="seek-edit" value="0" min="0" step="0.1" onchange="seekAudio('edit')">
+
                         <span class="time-display" id="time-edit">00:00 / --:--</span>
+
                     </div>
+
                     <audio id="audio-edit" preload="metadata" ontimeupdate="updateProgress('edit')" onloadedmetadata="initAudioDuration('edit')" onended="onAudioEnded('edit')"></audio>
+
                 </div>
 
                 <input type="hidden" id="edit-lesson-source-path">
+
                 <input type="hidden" id="edit-lesson-note-id">
 
                 <div class="form-field" style="margin-bottom: 0.75rem;">
+
                     <label>קובץ מקורי בשרת:</label>
+
                     <div id="edit-lesson-filename-display" style="font-weight: 600; color: var(--text-main); word-break: break-all; background: #f1f5f9; padding: 0.5rem 0.75rem; border-radius: 6px; font-size: 0.85rem;"></div>
+
                 </div>
 
                 <div class="form-field" style="margin-bottom: 0.75rem;">
+
                     <label>שם הרב:</label>
+
                     <input type="text" class="input-text" id="edit-lesson-rabbi" placeholder="למשל: הרב אורי" required>
+
                 </div>
 
                 <div class="form-field" style="margin-bottom: 0.75rem;">
+
                     <label>נושא / שם השיעור:</label>
+
                     <input type="text" class="input-text" id="edit-lesson-topic" placeholder="למשל: פרשת כי תצא">
+
                 </div>
 
                 <div class="form-field" style="margin-bottom: 0.75rem;">
+
                     <label>תאריך עברי:</label>
+
                     <input type="text" class="input-text" id="edit-lesson-date">
+
                 </div>
 
                 <div class="form-field" style="margin-bottom: 1.25rem;">
+
                     <label>תיקיית יעד בשרת הישיבה:</label>
+
                     <div class="folder-picker-wrap">
+
                         <button type="button" class="folder-select-btn" id="folder-btn-edit" onclick="openFolderExplorer('edit-modal')">
+
                             <span id="edit-lesson-folder-label">בחר תיקייה...</span>
+
                             <span>📁 ▾</span>
+
                         </button>
+
                         <input type="hidden" id="edit-lesson-dest-path">
+
                     </div>
+
                 </div>
+
             </div>
 
             <div class="modal-footer" style="display: flex; justify-content: space-between;">
+
                 <button class="btn btn-outline" onclick="closeEditLessonModal()">ביטול</button>
+
                 <button class="btn btn-success" id="edit-lesson-save-btn" onclick="saveEditedLesson()">
+
                     💾 שמור שינויים וסמן כטופל
+
                 </button>
+
             </div>
+
         </div>
+
     </div>
 
     <!-- Modal for Folder Explorer -->
+
     <div id="folder-modal" class="modal-overlay">
+
         <div class="modal-box">
+
             <div class="modal-header">
+
                 <h3>סייר תיקיות שרת הישיבה</h3>
+
                 <button class="btn-icon" onclick="closeFolderModal()">✕</button>
+
             </div>
-            
+
             <!-- Breadcrumbs Navigation Bar -->
+
             <div id="modal-breadcrumbs" class="breadcrumbs-bar">
+
                 <!-- e.g. ראשי ❯ אלול התשפ''ו ❯ רבני הישיבה -->
+
             </div>
 
             <div class="modal-body">
+
                 <div id="modal-folders-list" class="folders-column-list">
+
                     <!-- Clean list of subfolders in current directory -->
+
                 </div>
+
             </div>
 
             <div class="modal-footer">
+
                 <div style="display: flex; gap: 0.5rem; flex: 1; margin-left: 1rem;">
+
                     <input type="text" id="new-folder-input" class="input-text" placeholder="שם תיקייה חדשה כאן..." style="flex: 1;">
+
                     <button class="btn btn-outline" onclick="createNewFolderInCurrentDir()">➕ צור תיקייה</button>
+
                 </div>
+
                 <button class="btn btn-primary" onclick="confirmCurrentFolderSelection()">
+
                     ✓ בחר בתיקייה זו
+
                 </button>
+
             </div>
+
         </div>
+
     </div>
 
-    <script src="/static/app.js?v=3.0"></script>
+    <script src="/static/security_guard.js"></script>
+
+    <script src="/static/app.js?v=3.4"></script>
+
 </body>
+
 </html>
+

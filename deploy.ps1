@@ -10,6 +10,8 @@ Write-Host "==> [1/3] Packaging updated files into deploy_patch.tar.gz..." -Fore
 $FILES_TO_DEPLOY = @(
     "config.py",
     "web/server.py",
+    "web/storage.py",
+    "core/hebrew_date.py",
     "web/static/rav_tzvi.js",
     "web/static/rav_tzvi.css",
     "web/static/rav_tzvi.html",
@@ -20,7 +22,10 @@ $FILES_TO_DEPLOY = @(
     "web/templates/login.html",
     "core/usb_ingest.py",
     "core/file_manager.py",
-    "core/watcher.py"
+    "core/watcher.py",
+    "requirements.txt",
+    "setup_server_keepalive.sh",
+    "web/static/security_guard.js"
 )
 
 tar -czf deploy_patch.tar.gz $FILES_TO_DEPLOY
@@ -41,8 +46,8 @@ if ($LASTEXITCODE -ne 0) {
 
 Remove-Item deploy_patch.tar.gz -ErrorAction SilentlyContinue
 
-Write-Host "==> [3/3] Extracting on server and restarting services..." -ForegroundColor Cyan
-ssh -t $SERVER "cd $REMOTE_DIR && tar -xzf deploy_patch.tar.gz && rm -f deploy_patch.tar.gz && sudo systemctl restart web.service && (sudo systemctl restart recorder.service 2>/dev/null || true)"
+Write-Host "==> [3/3] Extracting on server, applying keep-alive, and restarting services..." -ForegroundColor Cyan
+ssh -t $SERVER "cd $REMOTE_DIR && tar -xzf deploy_patch.tar.gz && rm -f deploy_patch.tar.gz && chmod +x setup_server_keepalive.sh 2>/dev/null && bash setup_server_keepalive.sh && sudo systemctl restart web.service && (sudo systemctl restart recorder.service 2>/dev/null || true)"
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "==========================================" -ForegroundColor Green

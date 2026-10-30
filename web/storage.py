@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 
 import config
+from core.hebrew_date import get_hebrew_date_str
 
 NOTES_FILE = config.DATA_DIR / "notes.json"
 
@@ -32,13 +33,28 @@ def get_notes_data() -> List[Dict[str, Any]]:
                     if (now - dt).days >= 30:
                         modified = True
                         continue
+                    if not n.get("hebrew_date"):
+                        n["hebrew_date"] = get_hebrew_date_str(dt)
+                        modified = True
+                    if not n.get("created_time"):
+                        n["created_time"] = dt.strftime("%H:%M")
+                        modified = True
                 except Exception:
                     pass
+            if not n.get("hebrew_date"):
+                n["hebrew_date"] = get_hebrew_date_str(now)
+                modified = True
+            if not n.get("created_time"):
+                n["created_time"] = now.strftime("%H:%M")
+                modified = True
             valid_notes.append(n)
             
         if modified:
-            with open(NOTES_FILE, "w", encoding="utf-8") as f:
-                json.dump(valid_notes, f, ensure_ascii=False, indent=2)
+            try:
+                with open(NOTES_FILE, "w", encoding="utf-8") as f:
+                    json.dump(valid_notes, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
                 
         return valid_notes
     except Exception:
@@ -53,6 +69,8 @@ def save_note(
 ) -> Dict[str, Any]:
     """Saves a new note submitted by a student."""
     notes = get_notes_data()
+    now_dt = datetime.now()
+    hebrew_date = get_hebrew_date_str(now_dt)
     new_note = {
         "id": int(time.time() * 1000),
         "filename": os.path.basename(filename),
@@ -60,7 +78,9 @@ def save_note(
         "note_type": note_type,
         "description": description,
         "student_name": student_name or "תלמיד אנונימי",
-        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "created_at": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
+        "created_time": now_dt.strftime("%H:%M"),
+        "hebrew_date": hebrew_date,
         "status": "open"
     }
     notes.insert(0, new_note)

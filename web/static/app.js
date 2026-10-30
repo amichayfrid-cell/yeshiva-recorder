@@ -1,5 +1,6 @@
 // State
 let pendingLessons = [];
+let currentPendingSource = 'all';
 let allNotes = [];
 let activeCardIndex = null;
 let currentFolderData = null;
@@ -44,9 +45,93 @@ async function loadPendingLessons() {
         pendingLessons = data.lessons || [];
 
         document.getElementById("pending-count").innerText = pendingLessons.length;
+        renderPendingFolders();
         renderPendingLessons();
     } catch (e) {
         listContainer.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><h3>שגיאה בטעינת השיעורים</h3><p>${e.message}</p></div>`;
+    }
+}
+
+// Render Folder Cards (like Rav Tzvi)
+function renderPendingFolders() {
+    const foldersSection = document.getElementById("pending-folders-section");
+    const foldersGrid = document.getElementById("pending-folders-grid");
+    const folderBar = document.getElementById("current-folder-bar");
+    if (!foldersSection || !foldersGrid) return;
+
+    if (pendingLessons.length === 0) {
+        foldersSection.style.display = "none";
+        if (folderBar) folderBar.style.display = "none";
+        return;
+    }
+
+    foldersSection.style.display = "block";
+
+    const uploadCount = pendingLessons.filter(l => l.source === 'upload').length;
+    const recorderCount = pendingLessons.filter(l => l.source !== 'upload').length;
+
+    const uploadSubText = uploadCount > 0 ? `${uploadCount} שיעורים` : 'אין שיעורים';
+    const recorderSubText = recorderCount > 0 ? `${recorderCount} שיעורים` : 'אין שיעורים';
+
+    foldersGrid.innerHTML = `
+        <div class="folder-card ${currentPendingSource === 'upload' ? 'selected' : ''}" onclick="selectPendingFolder('upload')">
+            <span class="folder-icon">📁</span>
+            <div style="flex: 1; min-width: 0;">
+                <div class="folder-name" title="העלאת שיעורים">העלאת שיעורים</div>
+                <div class="folder-sub">${uploadSubText}</div>
+            </div>
+        </div>
+        <div class="folder-card ${currentPendingSource === 'recorder' ? 'selected' : ''}" onclick="selectPendingFolder('recorder')">
+            <span class="folder-icon">📁</span>
+            <div style="flex: 1; min-width: 0;">
+                <div class="folder-name" title="שיעורים למיון (מקלט שמע)">שיעורים למיון (מקלט שמע)</div>
+                <div class="folder-sub">${recorderSubText}</div>
+            </div>
+        </div>
+    `;
+
+    renderFolderBar(uploadCount, recorderCount);
+}
+
+function selectPendingFolder(source) {
+    if (currentPendingSource === source) {
+        currentPendingSource = 'all';
+    } else {
+        currentPendingSource = source;
+    }
+    renderPendingFolders();
+    renderPendingLessons();
+}
+
+function renderFolderBar(uploadCount, recorderCount) {
+    const folderBar = document.getElementById("current-folder-bar");
+    const breadcrumbs = document.getElementById("pending-breadcrumbs");
+    const btnAll = document.getElementById("btn-show-all-folders");
+    if (!folderBar || !breadcrumbs) return;
+
+    folderBar.style.display = "flex";
+
+    if (currentPendingSource === 'all') {
+        breadcrumbs.innerHTML = `
+            <span>📁 כל התיקיות</span>
+            <span class="breadcrumb-sep">•</span>
+            <span style="color: var(--text-muted); font-size: 0.85rem;">סה"כ ${pendingLessons.length} שיעורים</span>
+        `;
+        if (btnAll) btnAll.style.display = "none";
+    } else if (currentPendingSource === 'upload') {
+        breadcrumbs.innerHTML = `
+            <span class="breadcrumb-crumb" onclick="selectPendingFolder('all')">📁 כל התיקיות</span>
+            <span class="breadcrumb-sep">❮</span>
+            <span>📤 העלאת שיעורים (${uploadCount} שיעורים)</span>
+        `;
+        if (btnAll) btnAll.style.display = "inline-flex";
+    } else if (currentPendingSource === 'recorder') {
+        breadcrumbs.innerHTML = `
+            <span class="breadcrumb-crumb" onclick="selectPendingFolder('all')">📁 כל התיקיות</span>
+            <span class="breadcrumb-sep">❮</span>
+            <span>🎙️ שיעורים למיון - מקלט שמע (${recorderCount} שיעורים)</span>
+        `;
+        if (btnAll) btnAll.style.display = "inline-flex";
     }
 }
 
@@ -58,27 +143,57 @@ function renderPendingLessons() {
             <div class="empty-state">
                 <div class="icon">🎉</div>
                 <h3>אין שיעורים הממתינים למיון</h3>
-                <p>כל השיעורים מוינו בהצלחה! שיעורים חדשים יופיעו כאן מיד עם חיבור מקלט שמע.</p>
+                <p>כל השיעורים מוינו בהצלחה! שיעורים חדשים יופיעו כאן מיד עם חיבור מקלט שמע או העלאה לתיקיית העלאת שיעורים.</p>
             </div>
         `;
         return;
     }
 
-    listContainer.innerHTML = pendingLessons.map((lesson, index) => {
+    let filtered = pendingLessons;
+    if (currentPendingSource === 'upload') {
+        filtered = pendingLessons.filter(l => l.source === 'upload');
+    } else if (currentPendingSource === 'recorder') {
+        filtered = pendingLessons.filter(l => l.source !== 'upload');
+    }
+
+    if (filtered.length === 0) {
+        const folderTitle = currentPendingSource === 'upload' ? 'העלאת שיעורים' : 'שיעורים למיון (מקלט שמע)';
+        listContainer.innerHTML = `
+            <div class="empty-state">
+                <div class="icon">📁</div>
+                <h3>אין שיעורים בתיקיית '${folderTitle}'</h3>
+                <p>כל השיעורים בתיקייה זו מוינו בהצלחה.</p>
+                <div style="margin-top: 1rem;">
+                    <button class="btn btn-outline" onclick="selectPendingFolder('all')">
+                        📁 חזור לכל התיקיות
+                    </button>
+                </div>
+            </div>
+        `;
+        return;
+    }
+
+    listContainer.innerHTML = filtered.map(lesson => {
+        const index = pendingLessons.indexOf(lesson);
         const notesHtml = (lesson.notes && lesson.notes.length > 0) ? lesson.notes.map(note => `
             <div class="student-note-banner">
                 <span class="icon">🔔</span>
                 <div>
                     <div class="note-content"><strong>הערת תלמיד:</strong> ${escapeHtml(note.description)}</div>
-                    <div class="note-meta">נשלח ע"י ${escapeHtml(note.student_name)} | ${note.created_at}</div>
+                    <div class="note-meta" title="${escapeHtml(note.created_at || '')}">נשלח ע"י ${escapeHtml(note.student_name)} | ${escapeHtml(formatNoteDateDisplay(note))}</div>
                 </div>
             </div>
         `).join("") : "";
+
+        const sourceBadge = lesson.source === 'upload'
+            ? `<span class="badge badge-source-upload" title="שיעור שהועלה לתיקיית העלאת שיעורים">📤 העלאת שיעורים</span>`
+            : `<span class="badge badge-source-recorder" title="שיעור שנקלט ישירות ממקלט שמע (USB)">🎙️ מקלט שמע</span>`;
 
         return `
             <div class="lesson-card" id="card-${index}">
                 <div class="card-header">
                     <div class="card-title-wrap">
+                        ${sourceBadge}
                         <span class="badge badge-hebrew-date">${escapeHtml(lesson.hebrew_date)}</span>
                         <span class="badge badge-time">שעת הקלטה: ${lesson.created_time}</span>
                         <span class="badge badge-time">${lesson.size_mb} MB</span>
@@ -99,7 +214,7 @@ function renderPendingLessons() {
                         <input type="range" class="seek-bar" id="seek-${index}" value="0" min="0" step="0.1" onchange="seekAudio('${index}')">
                         <span class="time-display" id="time-${index}">00:00 / --:--</span>
                     </div>
-                    <audio id="audio-${index}" src="/api/audio/stream?filename=${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}" preload="none" ontimeupdate="updateProgress('${index}')" onloadedmetadata="initAudioDuration('${index}')" onended="onAudioEnded('${index}')"></audio>
+                    <audio id="audio-${index}" src="/api/audio/stream?filename=${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}&source_path=${encodeURIComponent(lesson.full_path || '').replace(/'/g, '%27')}" preload="none" ontimeupdate="updateProgress('${index}')" onloadedmetadata="initAudioDuration('${index}')" onended="onAudioEnded('${index}')"></audio>
                 </div>
 
                 <!-- Classification Form Grid -->
@@ -127,10 +242,10 @@ function renderPendingLessons() {
                         </div>
                     </div>
                     <div style="display: flex; gap: 0.5rem;">
-                        <button class="btn btn-success" onclick="classifyLesson('${index}', '${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}')">
+                        <button class="btn btn-success" onclick="classifyLesson('${index}', '${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}', '${encodeURIComponent(lesson.full_path || '').replace(/'/g, '%27')}')">
                             💾 שמור וסווג
                         </button>
-                        <button type="button" class="btn btn-danger" onclick="deleteLesson('${index}', '${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}')" title="מחק הקלטה לצמיתות">
+                        <button type="button" class="btn btn-danger" onclick="deleteLesson('${index}', '${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}', '${encodeURIComponent(lesson.full_path || '').replace(/'/g, '%27')}')" title="מחק הקלטה לצמיתות">
                             🗑️ מחק
                         </button>
                     </div>
@@ -425,8 +540,9 @@ async function createNewFolderInCurrentDir() {
 }
 
 // Classify and Move Lesson
-async function classifyLesson(index, encodedFilename) {
+async function classifyLesson(index, encodedFilename, encodedSourcePath) {
     const filename = decodeURIComponent(encodedFilename);
+    const sourcePath = encodedSourcePath ? decodeURIComponent(encodedSourcePath) : "";
     const rabbi = document.getElementById(`rabbi-${index}`).value.trim();
     const topic = document.getElementById(`topic-${index}`).value.trim();
     const hebrewDate = document.getElementById(`date-${index}`).value.trim();
@@ -462,6 +578,9 @@ async function classifyLesson(index, encodedFilename) {
     try {
         const form = new FormData();
         form.append("filename", filename);
+        if (sourcePath) {
+            form.append("source_path", sourcePath);
+        }
         form.append("rabbi_name", rabbi);
         form.append("lesson_topic", topic);
         form.append("hebrew_date", hebrewDate);
@@ -474,6 +593,7 @@ async function classifyLesson(index, encodedFilename) {
             card.remove();
             pendingLessons.splice(index, 1);
             document.getElementById("pending-count").innerText = pendingLessons.length;
+            renderPendingFolders();
             if (pendingLessons.length === 0) {
                 renderPendingLessons();
             }
@@ -552,7 +672,10 @@ function renderAllNotes() {
                         <span class="badge ${note.status === 'open' ? 'badge-alert' : 'badge-hebrew-date'}">${note.status === 'open' ? 'פתוחה' : 'טופלה'}</span>
                         <strong style="margin-right: 0.5rem;">${escapeHtml(note.filename)}</strong>
                     </div>
-                    <span style="font-size: 0.8rem; color: var(--text-muted);">${note.created_at}</span>
+                    <div style="display: flex; align-items: center; gap: 0.4rem;" title="${escapeHtml(note.created_at || '')}">
+                        <span class="badge badge-hebrew-date">${escapeHtml(getNoteHebrewDate(note) || formatNoteDateDisplay(note))}</span>
+                        <span class="badge badge-time">${escapeHtml(getNoteTime(note))}</span>
+                    </div>
                 </div>
                 <div style="margin: 0.75rem 0;">
                     <p><strong>פירוט:</strong> ${escapeHtml(note.description)}</p>
@@ -579,6 +702,36 @@ async function resolveNote(noteId) {
     loadNotes();
 }
 
+function getNoteHebrewDate(note) {
+    if (!note) return "";
+    if (note.hebrew_date) return note.hebrew_date;
+    if (note.created_at) {
+        try {
+            const dt = new Date(note.created_at.replace(' ', 'T'));
+            if (!isNaN(dt.getTime())) {
+                return new Intl.DateTimeFormat('he-u-ca-hebrew', { day: 'numeric', month: 'long', year: 'numeric' }).format(dt);
+            }
+        } catch (e) {}
+    }
+    return "";
+}
+
+function getNoteTime(note) {
+    if (!note) return "";
+    const timePart = note.created_time || (note.created_at ? note.created_at.split(' ')[1] : '');
+    return timePart ? (timePart.length === 8 ? timePart.substring(0, 5) : timePart) : '';
+}
+
+function formatNoteDateDisplay(note) {
+    if (!note) return "";
+    const heb = getNoteHebrewDate(note);
+    const timeStr = getNoteTime(note);
+    if (heb) {
+        return timeStr ? `${heb} | ${timeStr}` : heb;
+    }
+    return note.created_at || "";
+}
+
 function escapeHtml(str) {
     if (!str) return "";
     return String(str)
@@ -590,8 +743,9 @@ function escapeHtml(str) {
 }
 
 // Delete Lesson with active confirmation
-async function deleteLesson(index, encodedFilename) {
+async function deleteLesson(index, encodedFilename, encodedSourcePath) {
     const filename = decodeURIComponent(encodedFilename);
+    const sourcePath = encodedSourcePath ? decodeURIComponent(encodedSourcePath) : "";
     const confirmMsg = `האם אתה בטוח שברצונך למחוק לצמיתות את ההקלטה?\n\n"${filename}"\n\nפעולה זו אינה ניתנת לביטול!`;
     if (!confirm(confirmMsg)) {
         return;
@@ -618,6 +772,9 @@ async function deleteLesson(index, encodedFilename) {
     try {
         const form = new FormData();
         form.append("filename", filename);
+        if (sourcePath) {
+            form.append("source_path", sourcePath);
+        }
 
         const res = await fetch("/api/lessons/delete", { method: "POST", body: form });
         const data = await res.json();
@@ -626,6 +783,7 @@ async function deleteLesson(index, encodedFilename) {
             if (card) card.remove();
             pendingLessons.splice(index, 1);
             document.getElementById("pending-count").innerText = pendingLessons.length;
+            renderPendingFolders();
             if (pendingLessons.length === 0) {
                 renderPendingLessons();
             }
@@ -654,7 +812,7 @@ async function openEditLessonModal(encodedFilename, noteId) {
     if (note) {
         document.getElementById("edit-modal-student-name").innerText = note.student_name || "תלמיד אנונימי";
         document.getElementById("edit-modal-note-desc").innerText = note.description || "";
-        document.getElementById("edit-modal-note-meta").innerText = `נשלח בתאריך: ${note.created_at}`;
+        document.getElementById("edit-modal-note-meta").innerText = `נשלח בתאריך: ${formatNoteDateDisplay(note)}`;
     }
     document.getElementById("edit-lesson-note-id").value = noteId || "";
 

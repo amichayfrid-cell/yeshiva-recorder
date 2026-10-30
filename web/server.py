@@ -329,7 +329,8 @@ def stream_audio_file(file_path: Path, request: Optional[Request] = None):
         mime_type = mime_map.get(ext, "video/mp4" if ext in (".mp4", ".webm", ".mkv", ".mov") else "audio/mpeg")
         return serve_static_audio_range(file_path, mime_type, request)
 
-    if ext == ".wma":
+    # Browser-incompatible audio formats (AMR, WMA, AIFF, MP2, FLAC, etc.) -> transcode on-the-fly to MP3
+    if ext in (".amr", ".wma", ".aif", ".aiff", ".mp2", ".m4b", ".flac", ".opus") or ext in config.USB_AUDIO_EXTENSIONS:
         return stream_transcoded_mp3(file_path, request)
 
     mime, _ = mimetypes.guess_type(str(file_path))
@@ -410,22 +411,43 @@ def list_pending_lessons(request: Request):
     if not is_authenticated(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    sorting_dir = get_sorting_dir()
     lessons = []
+    
+    # Target 1: USB Ingestion / needs_review directory
+    sorting_dir = get_sorting_dir()
+    scan_sources = [
+        (sorting_dir, "recorder", "מקלט שמע", "badge-source-recorder")
+    ]
+    
+    # Target 2: Upload directory (\\mdserver\העלאת שיעורים)
+    upload_dirs = config.get_upload_dirs()
+    seen_paths = set()
+    for u_dir in upload_dirs:
+        try:
+            r_path = u_dir.resolve()
+            if r_path in seen_paths or r_path == sorting_dir.resolve():
+                continue
+            seen_paths.add(r_path)
+            if u_dir.exists():
+                scan_sources.append(
+                    (u_dir, "upload", "העלאת שיעורים", "badge-source-upload")
+                )
+        except Exception:
+            continue
 
-    if sorting_dir.exists():
+    for target_dir, source_key, source_label, source_badge_class in scan_sources:
+        if not target_dir.exists():
+            continue
         entries = []
         try:
-            for p in sorting_dir.iterdir():
+            # For upload directory check recursively, for sorting_dir check direct files
+            scan_iter = target_dir.rglob("*") if source_key == "upload" else target_dir.iterdir()
+            for p in scan_iter:
                 try:
-                    # Ignore and clean any hidden/temporary/CIFS files (like .__smb0001)
                     if p.name.startswith(".") or "smb" in p.name.lower():
-                        try:
-                            p.unlink(missing_ok=True)
-                        except Exception:
-                            pass
                         continue
 
+                    # STRICT AUDIO ONLY: filter out text (.txt), docs (.docx, .doc), pdf, etc.
                     if p.is_file() and p.suffix.lower() in config.USB_AUDIO_EXTENSIONS:
                         st = p.stat()
                         entries.append((p, st))
@@ -433,9 +455,6 @@ def list_pending_lessons(request: Request):
                     continue
         except (OSError, FileNotFoundError, PermissionError):
             pass
-
-        # Sort safely by mtime
-        entries.sort(key=lambda item: item[1].st_mtime, reverse=True)
 
         for f, st in entries:
             try:
@@ -445,31 +464,39 @@ def list_pending_lessons(request: Request):
                 
                 lessons.append({
                     "filename": f.name,
+                    "full_path": str(f),
                     "size_bytes": st.st_size,
                     "size_mb": round(st.st_size / (1024 * 1024), 1),
                     "created_time": file_dt.strftime("%H:%M"),
+                    "mtime": st.st_mtime,
                     "hebrew_date": hebrew_date,
-                    "notes": notes
+                    "notes": notes,
+                    "source": source_key,
+                    "source_label": source_label,
+                    "source_badge_class": source_badge_class
                 })
             except Exception:
                 continue
 
-    return JSONResponse({"status": "success", "lessons": lessons, "target_dir": str(sorting_dir)})
+    # Sort all lessons descending by mtime (newest first)
+    lessons.sort(key=lambda item: item.get("mtime", 0), reverse=True)
+
+    return JSONResponse({
+        "status": "success", 
+        "lessons": lessons, 
+        "target_dir": str(sorting_dir),
+        "upload_dir": str(upload_dirs[0]) if upload_dirs else None,
+        "upload_dirs": [str(d) for d in upload_dirs]
+    })
 
 @app.get("/api/audio/stream")
-def stream_audio(request: Request, filename: str = Query(...)):
+def stream_audio(request: Request, filename: str = Query(...), source_path: Optional[str] = Query(None)):
     if not is_authenticated(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    sorting_dir = get_sorting_dir()
-    file_path = sorting_dir / filename
-
-    if not file_path.exists() or not file_path.is_file():
-        p = Path(filename)
-        if p.exists() and p.is_file():
-            file_path = p
-        else:
-            raise HTTPException(status_code=404, detail="File not found")
+    file_path = locate_lesson_file(source_path or filename, original_path=source_path)
+    if not file_path or not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
 
     return stream_audio_file(file_path, request)
 
@@ -502,16 +529,17 @@ def classify_lesson(
     rabbi_name: str = Form(...),
     lesson_topic: Optional[str] = Form(""),
     hebrew_date: str = Form(...),
-    destination_folder: str = Form(...)
+    destination_folder: str = Form(...),
+    source_path: Optional[str] = Form(None)
 ):
     if not is_authenticated(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    sorting_dir = get_sorting_dir()
-    source_file = sorting_dir / filename
-
-    if not source_file.exists():
+    file_path = locate_lesson_file(source_path or filename, original_path=source_path)
+    if not file_path or not file_path.exists():
         raise HTTPException(status_code=404, detail="Source file not found")
+
+    source_file = file_path
 
     dest_dir = Path(destination_folder)
     if not dest_dir.exists():
@@ -575,25 +603,35 @@ def change_note_status(request: Request, note_id: int = Form(...), status: str =
     return JSONResponse({"status": "success" if success else "error"})
 
 def locate_lesson_file(filename: str, original_path: Optional[str] = None) -> Optional[Path]:
-    """Locates an audio file anywhere in the sorting directory or network share."""
+    """Locates an audio file anywhere in the sorting directory, upload directory, or network share."""
+    # 1. If explicit path provided and exists
+    if original_path:
+        p_orig = Path(original_path.replace('\\', '/'))
+        if p_orig.exists() and p_orig.is_file():
+            return p_orig
+
+    p_direct = Path(filename)
+    if p_direct.exists() and p_direct.is_file():
+        return p_direct
+
     clean_fn = os.path.basename(filename.replace('\\', '/'))
     
-    # 1. Check sorting dir first
+    # 2. Check sorting dir
     sorting_dir = get_sorting_dir()
     p = sorting_dir / clean_fn
     if p.exists() and p.is_file():
         return p
 
-    # 2. Check if filename itself is an absolute path that exists
-    p_direct = Path(filename)
-    if p_direct.exists() and p_direct.is_file():
-        return p_direct
-        
-    # 3. Check original_path if provided
-    if original_path:
-        p_orig = Path(original_path.replace('\\', '/'))
-        if p_orig.exists() and p_orig.is_file():
-            return p_orig
+    # 3. Check upload directories (\\mdserver\העלאת שיעורים)
+    for upload_dir in config.get_upload_dirs():
+        if upload_dir and upload_dir.exists():
+            p_up = upload_dir / clean_fn
+            if p_up.exists() and p_up.is_file():
+                return p_up
+            # Check subfolders of upload_dir
+            for sub_p in upload_dir.rglob(clean_fn):
+                if sub_p.is_file():
+                    return sub_p
 
     # 4. Search within NETWORK_MOUNT_POINT / LOCAL_STAGING_DIR
     root = config.NETWORK_MOUNT_POINT if config.NETWORK_MOUNT_POINT.exists() else config.LOCAL_STAGING_DIR
@@ -720,27 +758,33 @@ def update_lesson(
     })
 
 @app.post("/api/lessons/delete")
-def delete_lesson(request: Request, filename: str = Form(...)):
+def delete_lesson(
+    request: Request, 
+    filename: str = Form(...),
+    source_path: Optional[str] = Form(None)
+):
     if not is_authenticated(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    clean_fn = os.path.basename(filename.replace('\\', '/'))
-    sorting_dir = get_sorting_dir()
-    file_path = sorting_dir / clean_fn
-
-    if not file_path.exists() or not file_path.is_file():
+    file_path = locate_lesson_file(source_path or filename, original_path=source_path)
+    if not file_path or not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
 
     try:
+        parent_dir = file_path.parent
+        clean_fn = file_path.name
         file_path.unlink()
         
-        # Clean any CIFS temporary files in sorting dir
-        for f in sorting_dir.iterdir():
-            if f.is_file() and ("smb" in f.name.lower()):
-                try:
-                    f.unlink(missing_ok=True)
-                except Exception:
-                    pass
+        # Clean any CIFS temporary files in parent dir
+        try:
+            for f in parent_dir.iterdir():
+                if f.is_file() and ("smb" in f.name.lower()):
+                    try:
+                        f.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
         # Resolve any open notes for this file
         for note in storage.get_notes_for_file(clean_fn):
@@ -948,6 +992,8 @@ def get_rav_tzvi_sources() -> Dict[str, Dict[str, Any]]:
         "אחראי שמע", 
         "רבנים שונים",
         "על הגברת החירות [פלאפונים וכו'] - רבנים שונים",
+        "מפלגת נעם",
+        "מפלגת נועם",
         "lost+found", 
         "$RECYCLE.BIN", 
         "System Volume Information"
@@ -958,7 +1004,7 @@ def get_rav_tzvi_sources() -> Dict[str, Dict[str, Any]]:
         # 1. Dynamically scan all semester and year folders in base_mount
         try:
             for item in sorted(base_mount.iterdir(), key=lambda x: x.name, reverse=True):
-                if item.is_dir() and not item.name.startswith(".") and item.name not in EXCLUDED and "רבנים שונים" not in item.name and "מפלג" not in item.name:
+                if item.is_dir() and not item.name.startswith(".") and item.name not in EXCLUDED and "רבנים שונים" not in item.name and "מפלג" not in item.name and "נעם" not in item.name and "נועם" not in item.name:
                     rt_folder = find_rav_tzvi_in_folder(item)
                     if rt_folder:
                         slug = re.sub(r'[^a-zA-Z0-9_\u0590-\u05FF]', '_', item.name).strip("_")
@@ -978,24 +1024,6 @@ def get_rav_tzvi_sources() -> Dict[str, Dict[str, Any]]:
                 "path": arch
             }
 
-        # 3. Mifleget Noam (from network share!)
-        noam = find_noam_folder(base_mount)
-        if noam:
-            sources["noam"] = {
-                "display_name": "מפלגת נעם",
-                "path": noam
-            }
-
-    # Local Noam folder (used when not found on the share, e.g. share not mounted)
-    if "noam" not in sources:
-        for local_noam in [config.NOAM_DIR, config.DATA_DIR / "מפלגת נעם"]:
-            if local_noam.exists() and local_noam.is_dir():
-                sources["noam"] = {
-                    "display_name": "מפלגת נעם",
-                    "path": local_noam
-                }
-                break
-
     # Local Rav Tzvi folder: show if it has files, or if nothing else was found
     local_dir = config.RAV_TZVI_DIR
     local_has_items = False
@@ -1004,7 +1032,7 @@ def get_rav_tzvi_sources() -> Dict[str, Dict[str, Any]]:
             local_has_items = any(not e.name.startswith(".") for e in local_dir.iterdir())
         except Exception:
             pass
-    if local_has_items or not any(k != "noam" for k in sources):
+    if local_has_items or not sources:
         local_dir.mkdir(parents=True, exist_ok=True)
         sources["local"] = {
             "display_name": "שיעורי הרב צבי (מקומי)",
@@ -1485,7 +1513,22 @@ def docx_to_html(file_path: Path) -> str:
         return f"<p style='color: #ef4444;'>שגיאה בקריאת מסמך DOCX: {html.escape(str(e))}</p>"
 
 def extract_text_from_doc(file_path: Path) -> str:
-    """Extracts readable Hebrew and Unicode text from legacy .doc binary files."""
+    """Extracts readable Hebrew and Unicode text from legacy .doc and RTF files."""
+    # Try soffice (LibreOffice) headless conversion if installed on server
+    try:
+        import subprocess, tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cmd = ["soffice", "--headless", "--convert-to", "html:XHTML Writer File", "--outdir", tmpdir, str(file_path)]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=12)
+            out_files = list(Path(tmpdir).glob("*.html"))
+            if out_files and out_files[0].stat().st_size > 0:
+                html_txt = out_files[0].read_text(encoding="utf-8", errors="ignore")
+                body_match = re.search(r'<body[^>]*>(.*?)</body>', html_txt, re.DOTALL | re.IGNORECASE)
+                if body_match and len(body_match.group(1).strip()) > 0:
+                    return f"<div class='doc-body-inner'>{body_match.group(1)}</div>"
+    except Exception:
+        pass
+
     try:
         data = file_path.read_bytes()
         extracted_lines = []
@@ -1553,7 +1596,7 @@ def view_document_rav_tzvi(file: str = Query(..., description="Relative file sub
 
     ext = file_path.suffix.lower()
     
-    if ext == ".docx":
+    if ext in (".docx", ".docm", ".dotx", ".dotm"):
         html_content = docx_to_html(file_path)
         return JSONResponse({
             "status": "ok",
@@ -1561,7 +1604,7 @@ def view_document_rav_tzvi(file: str = Query(..., description="Relative file sub
             "filename": file_path.name,
             "html": html_content
         })
-    elif ext == ".doc":
+    elif ext in (".doc", ".dot", ".rtf", ".odt", ".wps"):
         html_content = extract_text_from_doc(file_path)
         return JSONResponse({
             "status": "ok",
@@ -1596,14 +1639,14 @@ def view_document_rav_tzvi(file: str = Query(..., description="Relative file sub
             "status": "ok",
             "type": "html",
             "filename": file_path.name,
-            "html": f"<p class='doc-notice'>קובץ מסוג {html.escape(ext)} זמין לצפייה באוויר. לתצוגה מעוצבת מושלמת יש להעלות בפורמט DOCX או PDF.</p>"
+            "html": f"<p class='doc-notice'>קובץ מסוג {html.escape(ext)} זמין לצפייה באוויר בלבד דרך האתר. הורדת הקובץ חסומה.</p>"
         })
 
 @app.get("/api/rav-tzvi/stream")
 def stream_rav_tzvi(file: str = Query(..., description="Relative file subpath"), token: str = Query(None), request: Request = None):
     """
     Protected streaming of Rav Tzvi shiurim directly from disk with Range Header support.
-    Disallows external downloads and supports responsive, uninterrupted web playback.
+    Strictly disallows raw downloading of Word and text documents to protect content.
     """
     if not token or token not in STREAMING_TOKENS:
         raise HTTPException(status_code=403, detail="Invalid or missing stream token")
@@ -1622,24 +1665,202 @@ def stream_rav_tzvi(file: str = Query(..., description="Relative file subpath"),
 
     ext = file_path.suffix.lower()
 
-    # Explicitly block raw downloading of Word documents to prevent copying/downloading
-    if ext in (".docx", ".doc"):
-        raise HTTPException(
-            status_code=403,
-            detail="הורדת קובץ Word חסומה. המסמך זמין לצפייה באוויר בלבד דרך האתר."
-        )
+    # If document is Word/Office format, render the entire document as structured HTML directly in the browser!
+    WORD_DOC_EXTENSIONS = {".docx", ".doc", ".docm", ".dotx", ".dotm", ".dot", ".rtf", ".odt", ".wps"}
+    if ext in WORD_DOC_EXTENSIONS:
+        if ext in (".docx", ".docm", ".dotx", ".dotm"):
+            body_html = docx_to_html(file_path)
+        else:
+            body_html = extract_text_from_doc(file_path)
+
+        page_html = f"""<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{html.escape(file_path.name)} | קריאת מסמך באוויר</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;500;600;700;800&display=swap">
+  <style>
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      padding: 0;
+      background: #f1f5f9;
+      color: #0f172a;
+      font-family: 'Assistant', sans-serif;
+      direction: rtl;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }}
+    .top-bar {{
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }}
+    .doc-title {{
+      font-size: 18px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }}
+    .badge {{
+      background: #2563eb;
+      color: #fff;
+      font-size: 12px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-weight: 600;
+    }}
+    .security-notice {{
+      font-size: 13px;
+      color: #94a3b8;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }}
+    .doc-container {{
+      max-width: 860px;
+      margin: 32px auto 80px auto;
+      background: #ffffff;
+      padding: 48px 60px;
+      border-radius: 14px;
+      box-shadow: 0 4px 25px rgba(0, 0, 0, 0.07);
+      border: 1px solid #e2e8f0;
+      position: relative;
+      min-height: 85vh;
+      font-size: 18px;
+      line-height: 1.85;
+    }}
+    .doc-container h1, .doc-container h2, .doc-container h3 {{
+      color: #0f172a;
+      font-weight: 800;
+      margin-top: 1.4em;
+      margin-bottom: 0.5em;
+    }}
+    .doc-container h1 {{ font-size: 26px; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; }}
+    .doc-container h2 {{ font-size: 22px; }}
+    .doc-container h3 {{ font-size: 19px; }}
+    .doc-container p {{
+      margin: 0 0 1.1em 0;
+      text-align: justify;
+    }}
+    .doc-container table {{
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1.5em 0;
+    }}
+    .doc-container td, .doc-container th {{
+      border: 1px solid #e2e8f0;
+      padding: 10px 14px;
+    }}
+    .doc-container img {{
+      max-width: 100%;
+      height: auto;
+      pointer-events: none;
+      -webkit-user-drag: none;
+    }}
+    .watermark {{
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) rotate(-30deg);
+      font-size: 42px;
+      font-weight: 800;
+      color: rgba(15, 23, 42, 0.04);
+      pointer-events: none;
+      white-space: nowrap;
+      z-index: 500;
+    }}
+    @media print {{
+      body * {{ display: none !important; }}
+      body::before {{
+        content: "הדפסת מסמכי הישיבה חסומה להגנה על זכויות יוצרים." !important;
+        display: block !important;
+        font-size: 24pt !important;
+        text-align: center !important;
+        margin-top: 200px !important;
+      }}
+    }}
+  </style>
+</head>
+<body oncontextmenu="return false;">
+  <div class="top-bar">
+    <div class="doc-title">
+      <span>📄</span>
+      <span>{html.escape(file_path.name)}</span>
+      <span class="badge">צפייה באוויר בלבד</span>
+    </div>
+    <div class="security-notice">
+      <span>🔒</span>
+      <span>קריאה בלבד • הורדה והעתקה חסומות</span>
+    </div>
+  </div>
+
+  <div class="watermark">
+    מו"ר הרב צבי קוסטינר שליט"א • ישיבת מדברה כעדן • לצפייה בלבד
+  </div>
+
+  <main class="doc-container">
+    {body_html}
+  </main>
+
+  <script>
+    document.addEventListener('contextmenu', e => e.preventDefault());
+    document.addEventListener('copy', e => e.preventDefault());
+    document.addEventListener('cut', e => e.preventDefault());
+    document.addEventListener('keydown', e => {{
+      if (e.key === 'F12' || e.keyCode === 123) {{
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }}
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey) {{
+        const k = e.key.toLowerCase();
+        if (['i', 'j', 'c', 'k'].includes(k)) {{
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }}
+      }}
+      if (e.ctrlKey || e.metaKey) {{
+        const k = e.key.toLowerCase();
+        if (['s', 'p', 'c', 'u', 'a', 'x'].includes(k)) {{
+          e.preventDefault();
+        }}
+      }}
+    }});
+  </script>
+</body>
+</html>"""
+        return HTMLResponse(content=page_html, status_code=200, headers={"Content-Type": "text/html; charset=utf-8"})
 
     is_image = ext in getattr(config, "SUPPORTED_IMAGE_EXTENSIONS", set())
     is_doc = ext in getattr(config, "SUPPORTED_DOCUMENT_EXTENSIONS", set())
     if is_image or is_doc:
+        # Prevent raw downloading of any non-PDF document
+        if is_doc and ext not in (".pdf", ".txt"):
+            return HTMLResponse(
+                content="<h2 style='text-align:center;direction:rtl;margin-top:50px;font-family:sans-serif;'>קובץ זה זמין לקריאה וצפייה בלבד דרך האתר.</h2>",
+                status_code=403
+            )
         mime, _ = mimetypes.guess_type(str(file_path))
         mime = mime or "application/octet-stream"
-        inline = is_image or ext in (".pdf", ".txt")
         return FileResponse(
             path=file_path,
             media_type=mime,
             filename=file_path.name,
-            content_disposition_type="inline" if inline else "attachment",
+            content_disposition_type="inline",
         )
 
     return stream_audio_file(file_path, request)
@@ -1665,3 +1886,40 @@ def rav_tzvi_page():
         if candidate.exists():
             return FileResponse(str(candidate))
     return HTMLResponse("<h1>Rav Tzvi Library Loading... (rav_tzvi.html not found)</h1>", status_code=404)
+
+
+@app.get("/api/debug/upload-status")
+def debug_upload_status(request: Request):
+    proc_mounts = Path("/proc/mounts").read_text(errors="ignore") if Path("/proc/mounts").exists() else ""
+    fstab_content = Path("/etc/fstab").read_text(errors="ignore") if Path("/etc/fstab").exists() else ""
+    upload_mount = config.NETWORK_UPLOAD_MOUNT
+    
+    upload_files = []
+    if upload_mount.exists():
+        try:
+            upload_files = [p.name for p in upload_mount.iterdir()]
+        except Exception as e:
+            upload_files = [f"Error reading dir: {e}"]
+            
+    primary_upload_files = []
+    if config.NETWORK_SHARE_UPLOAD_SUBDIR.exists():
+        try:
+            primary_upload_files = [p.name for p in config.NETWORK_SHARE_UPLOAD_SUBDIR.iterdir()]
+        except Exception as e:
+            primary_upload_files = [f"Error reading dir: {e}"]
+
+    return {
+        "status": "success",
+        "upload_mount": str(upload_mount),
+        "upload_mount_exists": upload_mount.exists(),
+        "upload_mount_is_mounted": config.is_path_mounted(upload_mount),
+        "upload_mount_files_count": len(upload_files),
+        "upload_mount_sample_files": upload_files[:15],
+        "primary_share_mounted": config.is_network_share_mounted(),
+        "primary_share_upload_subdir": str(config.NETWORK_SHARE_UPLOAD_SUBDIR),
+        "primary_share_upload_subdir_exists": config.NETWORK_SHARE_UPLOAD_SUBDIR.exists(),
+        "primary_share_upload_subdir_sample_files": primary_upload_files[:15],
+        "resolved_upload_dirs": [str(d) for d in config.get_upload_dirs()],
+        "cifs_mounts": [l.strip() for l in proc_mounts.splitlines() if "cifs" in l.lower() or "smb" in l.lower()],
+        "fstab_upload_lines": [l.strip() for l in fstab_content.splitlines() if "upload" in l.lower() or "העלאת" in l]
+    }

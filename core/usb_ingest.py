@@ -77,11 +77,14 @@ def get_removable_mounts() -> List[Path]:
         if sys.platform.startswith("win"):
             if "removable" in opts or "cdrom" not in opts and fstype in ("fat", "fat32", "exfat"):
                 removable_paths.append(Path(mount))
-        # Linux detection: mounts in /media, /mnt, /run/media or vfat/exfat
+        # Linux detection: mounts in /media, /run/media or vfat/exfat (EXCLUDE network shares)
         else:
-            if any(mount.startswith(prefix) for prefix in ("/media", "/run/media", "/mnt")):
+            # Never treat CIFS/SMB/NFS network shares as removable USB drives!
+            if fstype in ("cifs", "smb", "smb3", "nfs") or str(mount).startswith(str(config.NETWORK_MOUNT_POINT)):
+                continue
+            if any(mount.startswith(prefix) for prefix in ("/media", "/run/media")):
                 removable_paths.append(Path(mount))
-            elif "removable" in opts:
+            elif "removable" in opts or fstype in ("vfat", "fat", "exfat", "msdos"):
                 removable_paths.append(Path(mount))
 
     return removable_paths

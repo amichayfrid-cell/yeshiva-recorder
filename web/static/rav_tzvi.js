@@ -28,6 +28,8 @@ const docModalTitle = document.getElementById('docModalTitle');
 const docModalIcon = document.getElementById('docModalIcon');
 const docContent = document.getElementById('docContent');
 const protectionToast = document.getElementById('protectionToast');
+let currentDocSubpath = null;
+let currentDocToken = null;
 
 function isVideoFile(fn) {
   if (!fn) return false;
@@ -264,8 +266,8 @@ function renderExplorer(folders, files, isSearchResult = false) {
       row.className = `file-row ${isPlaying ? 'playing' : ''} ${isVideo ? 'is-video' : ''} ${isOpenable ? 'is-doc' : ''}`;
       row.id = `file-row-${encodeId(file.subpath)}`;
       row.dataset.subpath = file.subpath;
-      row.onclick = () => isOpenable 
-        ? openDocument(file.subpath, file.filename) 
+      row.onclick = () => isOpenable
+        ? openDocument(file.subpath, file.filename)
         : (isVideo ? playVideo(file.subpath, file.filename) : playAudio(file.subpath, file.filename));
 
       let metaText = `גודל: ${file.size_mb} MB`;
@@ -276,15 +278,15 @@ function renderExplorer(folders, files, isSearchResult = false) {
       const fileIcon = isImage ? '🖼️' : (isDoc ? '📄' : (isVideo ? '🎬' : (isPlaying ? '🔊' : '🎵')));
       const actionText = isImage
         ? 'הצג תמונה ↗'
-        : (isDoc 
-          ? 'צפה במסמך ↗' 
-          : (isVideo 
-            ? 'צפה בסרטון ▶' 
+        : (isDoc
+          ? 'קרא מסמך'
+          : (isVideo
+            ? 'צפה בסרטון ▶'
             : (isPlaying && !audio.paused ? 'השהה ⏸' : 'השמע ▶')));
       const tagHtml = isImage
         ? '<span class="video-tag" style="background:#059669; color:#fff;">תמונה</span>'
-        : (isDoc 
-          ? '<span class="video-tag" style="background:#2563eb; color:#fff;">מסמך</span>' 
+        : (isDoc
+          ? '<span class="video-tag" style="background:#2563eb; color:#fff;">מסמך</span>'
           : (isVideo ? '<span class="video-tag">וידאו</span>' : ''));
 
       row.innerHTML = `
@@ -429,6 +431,8 @@ async function openDocument(fileSubpath, filename) {
     const tokenRes = await fetch(`/api/rav-tzvi/token?file=${encodeURIComponent(fileSubpath)}`, { method: 'POST' });
     if (!tokenRes.ok) throw new Error('Token error');
     const tokenData = await tokenRes.json();
+    currentDocSubpath = fileSubpath;
+    currentDocToken = tokenData.token;
 
     const viewRes = await fetch(`/api/rav-tzvi/view-doc?file=${encodeURIComponent(fileSubpath)}&token=${tokenData.token}`);
     if (!viewRes.ok) {
@@ -440,6 +444,17 @@ async function openDocument(fileSubpath, filename) {
 
     if (data.type === 'html') {
       content.innerHTML = data.html;
+      // Strip any links or download triggers from the parsed document
+      content.querySelectorAll('a').forEach(a => {
+        a.removeAttribute('href');
+        a.removeAttribute('download');
+        a.style.cursor = 'text';
+      });
+      content.querySelectorAll('img').forEach(img => {
+        img.setAttribute('draggable', 'false');
+        img.setAttribute('oncontextmenu', 'return false;');
+        img.style.pointerEvents = 'none';
+      });
     } else if (data.type === 'image') {
       content.innerHTML = `
         <div class="doc-image-wrapper">
@@ -492,9 +507,15 @@ function toggleDocFullscreen() {
   const container = modal.querySelector('.doc-modal-container');
   if (!container) return;
   if (!document.fullscreenElement) {
-    container.requestFullscreen().catch(() => {});
+    container.requestFullscreen().catch(() => { });
   } else {
-    document.exitFullscreen().catch(() => {});
+    document.exitFullscreen().catch(() => { });
+  }
+}
+
+function openCurrentDocInTab() {
+  if (currentDocSubpath && currentDocToken) {
+    window.open(`/api/rav-tzvi/stream?file=${encodeURIComponent(currentDocSubpath)}&token=${currentDocToken}`, '_blank');
   }
 }
 
@@ -591,7 +612,7 @@ async function playAudio(fileSubpath, filename) {
     const tokenRes = await fetch(`/api/rav-tzvi/token?file=${encodeURIComponent(fileSubpath)}`, { method: 'POST' });
     if (!tokenRes.ok) throw new Error('Token error');
     const tokenData = await tokenRes.json();
-    
+
     const streamUrl = `/api/rav-tzvi/stream?file=${encodeURIComponent(fileSubpath)}&token=${tokenData.token}`;
     audio.src = streamUrl;
     audio.playbackRate = parseFloat(speedSelect.value) || 1.0;
@@ -603,7 +624,7 @@ async function playAudio(fileSubpath, filename) {
         console.warn("Audio play warning:", playErr);
       }
     }
-    
+
     highlightPlayingFile();
   } catch (e) {
     console.error("Error playing audio:", e);
@@ -755,7 +776,7 @@ audio.addEventListener('error', async () => {
       audio.addEventListener('canplay', function onCanPlay() {
         audio.removeEventListener('canplay', onCanPlay);
         if (savedTime > 0) audio.currentTime = savedTime;
-        audio.play().catch(() => {});
+        audio.play().catch(() => { });
       });
       audio.load();
     }
@@ -915,7 +936,26 @@ document.addEventListener('cut', e => {
 });
 
 document.addEventListener('keydown', e => {
-  // Block browser save, print, and source shortcuts
+  // 1. Block F12 (Developer Tools)
+  if (e.key === 'F12' || e.keyCode === 123) {
+    e.preventDefault();
+    e.stopPropagation();
+    showProtectionToast('🔒 פתיחת כלי פיתוח (F12) חסומה להגנה על זכויות יוצרים');
+    return;
+  }
+
+  // 2. Block Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C, Ctrl+Shift+K (DevTools inspect/console)
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey) {
+    const k = e.key.toLowerCase();
+    if (['i', 'j', 'c', 'k'].includes(k)) {
+      e.preventDefault();
+      e.stopPropagation();
+      showProtectionToast('🔒 פתיחת כלי פיתוח (Ctrl+Shift+I) חסומה להגנה על זכויות יוצרים');
+      return;
+    }
+  }
+
+  // 3. Block browser save, print, and source shortcuts (Ctrl+S, Ctrl+U, Ctrl+P)
   if (e.ctrlKey || e.metaKey) {
     const k = e.key.toLowerCase();
     if (['s', 'u', 'p'].includes(k)) {
