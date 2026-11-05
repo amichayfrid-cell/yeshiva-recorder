@@ -365,20 +365,20 @@ function renderPendingLessons() {
                 <div class="form-grid">
                     <div class="form-field">
                         <label>שם הרב:</label>
-                        <input type="text" class="input-text" id="rabbi-${index}" placeholder="למשל: הרב אורי" required>
+                        <input type="text" class="input-text" id="rabbi-${index}" placeholder="למשל: הרב אורי" required onkeydown="handleLessonCardKeyDown(event, ${index}, 'rabbi')">
                     </div>
                     <div class="form-field">
                         <label>נושא / שם השיעור:</label>
-                        <input type="text" class="input-text" id="topic-${index}" placeholder="למשל: פרשת כי תצא">
+                        <input type="text" class="input-text" id="topic-${index}" placeholder="למשל: פרשת כי תצא" onkeydown="handleLessonCardKeyDown(event, ${index}, 'topic')">
                     </div>
                     <div class="form-field">
                         <label>תאריך עברי:</label>
-                        <input type="text" class="input-text" id="date-${index}" value="${escapeHtml(lesson.hebrew_date)}">
+                        <input type="text" class="input-text" id="date-${index}" value="${escapeHtml(lesson.hebrew_date)}" onkeydown="handleLessonCardKeyDown(event, ${index}, 'date')">
                     </div>
                     <div class="form-field">
                         <label>תיקיית יעד בשרת:</label>
                         <div class="folder-picker-wrap">
-                            <button type="button" class="folder-select-btn" id="folder-btn-${index}" onclick="openFolderExplorer('${index}')">
+                            <button type="button" class="folder-select-btn" id="folder-btn-${index}" onclick="openFolderExplorer('${index}')" onkeydown="handleLessonCardKeyDown(event, ${index}, 'folder')">
                                 <span id="folder-label-${index}">בחר תיקיית יעד...</span>
                                 <span>📁 ▾</span>
                             </button>
@@ -386,7 +386,7 @@ function renderPendingLessons() {
                         </div>
                     </div>
                     <div style="display: flex; gap: 0.5rem;">
-                        <button class="btn btn-success" onclick="classifyLesson('${index}', '${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}', '${encodeURIComponent(lesson.full_path || '').replace(/'/g, '%27')}')">
+                        <button id="save-btn-${index}" class="btn btn-success" onclick="classifyLesson('${index}', '${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}', '${encodeURIComponent(lesson.full_path || '').replace(/'/g, '%27')}')" onkeydown="handleLessonCardKeyDown(event, ${index}, 'save')">
                             💾 שמור וסווג
                         </button>
                         <button type="button" class="btn btn-danger" onclick="deleteLesson('${index}', '${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}', '${encodeURIComponent(lesson.full_path || '').replace(/'/g, '%27')}')" title="מחק הקלטה לצמיתות">
@@ -731,13 +731,16 @@ function enterSearchResultFolder(encodedFull) {
 function confirmDirectFolderSelection(encodedFull, encodedRel) {
     const full = decodeURIComponent(encodedFull);
     const rel = decodeURIComponent(encodedRel);
+    const targetCard = activeCardIndex;
 
     if (activeCardIndex === "edit-modal") {
         document.getElementById("edit-lesson-dest-path").value = full;
         document.getElementById("edit-lesson-folder-label").innerText = rel || "ראשי (שרת הישיבה)";
+        setTimeout(() => document.getElementById("edit-lesson-save-btn")?.focus(), 60);
     } else if (activeCardIndex !== null) {
         document.getElementById(`dest-path-${activeCardIndex}`).value = full;
         document.getElementById(`folder-label-${activeCardIndex}`).innerText = rel || "ראשי (שורש)";
+        setTimeout(() => document.getElementById(`save-btn-${targetCard}`)?.focus(), 60);
     }
     setStoredFolderPath(full, false);
     closeFolderModal();
@@ -751,48 +754,27 @@ function updateSearchHighlightedUI() {
 }
 
 function handleFolderSearchKeyDown(e) {
-    if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        clearFolderSearch(true);
-        return;
-    }
-
-    if (currentFolderSearchResults && currentFolderSearchResults.length > 0) {
-        if (e.key === "ArrowDown") {
-            e.preventDefault();
-            highlightedSearchResultIndex = (highlightedSearchResultIndex + 1) % currentFolderSearchResults.length;
-            updateSearchHighlightedUI();
-            const el = document.getElementById(`search-res-${highlightedSearchResultIndex}`);
-            if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
-        } else if (e.key === "ArrowUp") {
-            e.preventDefault();
-            highlightedSearchResultIndex = (highlightedSearchResultIndex - 1 + currentFolderSearchResults.length) % currentFolderSearchResults.length;
-            updateSearchHighlightedUI();
-            const el = document.getElementById(`search-res-${highlightedSearchResultIndex}`);
-            if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
-        } else if (e.key === "Enter") {
-            e.preventDefault();
-            const item = currentFolderSearchResults[highlightedSearchResultIndex];
-            if (item) {
-                if (e.ctrlKey) {
-                    confirmDirectFolderSelection(encodeURIComponent(item.full_path), encodeURIComponent(item.rel_path || item.name));
-                } else {
-                    enterSearchResultFolder(encodeURIComponent(item.full_path));
-                }
-            }
-        }
-    }
+    handleFolderModalGlobalKeyDown(e);
 }
 
 function openFolderExplorer(cardIndex) {
     activeCardIndex = cardIndex;
     clearFolderSearch(false);
+    highlightedFolderIndex = 0;
+    highlightedSearchResultIndex = 0;
     const box = document.querySelector("#folder-modal .modal-box");
     if (box && box._resetDrag) box._resetDrag();
     const currentStoredPath = getStoredFolderPath();
     fetchFolderContent(currentStoredPath);
     document.getElementById("folder-modal").classList.add("open");
+
+    setTimeout(() => {
+        const input = document.getElementById("modal-folder-search-input");
+        if (input) {
+            input.focus();
+            input.select();
+        }
+    }, 60);
 }
 
 function closeFolderModal() {
@@ -966,57 +948,343 @@ function scrollHighlightedIntoView() {
     }
 }
 
-// Keyboard Navigation Listener
-function setupKeyboardListeners() {
-    window.addEventListener("keydown", (e) => {
-        const modal = document.getElementById("folder-modal");
-        if (!modal.classList.contains("open")) return;
+// ==========================================
+// Full Keyboard Navigation & Accessibility Engine
+// ==========================================
 
-        // If typing in new folder input or search input, allow normal typing
-        if (document.activeElement === document.getElementById("modal-folder-search-input")) {
-            return;
+function handleFolderModalGlobalKeyDown(e) {
+    const searchInput = document.getElementById("modal-folder-search-input");
+    const newFolderInput = document.getElementById("new-folder-input");
+    const isSearchFocused = (document.activeElement === searchInput);
+    const isNewFolderFocused = (document.activeElement === newFolderInput);
+
+    // Escape: clear search if has text, or close modal
+    if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (searchInput && searchInput.value.trim().length > 0) {
+            clearFolderSearch(true);
+            searchInput.focus();
+        } else {
+            closeFolderModal();
         }
-        if (document.activeElement === document.getElementById("new-folder-input")) {
-            if (e.key === "Enter") {
-                createNewFolderInCurrentDir();
+        return;
+    }
+
+    // Ctrl + Enter: Instant Selection Confirmation from anywhere!
+    if (e.ctrlKey && e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (currentFolderSearchResults && currentFolderSearchResults.length > 0) {
+            const item = currentFolderSearchResults[highlightedSearchResultIndex];
+            if (item) {
+                confirmDirectFolderSelection(encodeURIComponent(item.full_path), encodeURIComponent(item.rel_path || item.name));
+                return;
             }
-            return;
         }
+        confirmCurrentFolderSelection();
+        return;
+    }
 
-        const subfolders = (currentFolderData && currentFolderData.subfolders) ? currentFolderData.subfolders : [];
+    // If user is typing in new folder input:
+    if (isNewFolderFocused) {
+        if (e.key === "Enter") {
+            e.preventDefault();
+            createNewFolderInCurrentDir();
+        }
+        return;
+    }
 
-        if (e.key === "ArrowDown") {
-            e.preventDefault();
-            if (subfolders.length > 0) {
-                highlightedFolderIndex = (highlightedFolderIndex + 1) % subfolders.length;
-                updateHighlightedUI();
-                scrollHighlightedIntoView();
+    const isSearching = (currentFolderSearchResults !== null);
+    const subfolders = (currentFolderData && currentFolderData.subfolders)
+        ? currentFolderData.subfolders.filter(s => !s.name.includes("הגברת החירות"))
+        : [];
+
+    // ArrowDown
+    if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (isSearching && currentFolderSearchResults && currentFolderSearchResults.length > 0) {
+            highlightedSearchResultIndex = (highlightedSearchResultIndex + 1) % currentFolderSearchResults.length;
+            updateSearchHighlightedUI();
+            const el = document.getElementById(`search-res-${highlightedSearchResultIndex}`);
+            if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        } else if (!isSearching && subfolders.length > 0) {
+            highlightedFolderIndex = (highlightedFolderIndex + 1) % subfolders.length;
+            updateHighlightedUI();
+            scrollHighlightedIntoView();
+        }
+        return;
+    }
+
+    // ArrowUp
+    if (e.key === "ArrowUp") {
+        e.preventDefault();
+        if (isSearching && currentFolderSearchResults && currentFolderSearchResults.length > 0) {
+            highlightedSearchResultIndex = (highlightedSearchResultIndex - 1 + currentFolderSearchResults.length) % currentFolderSearchResults.length;
+            updateSearchHighlightedUI();
+            const el = document.getElementById(`search-res-${highlightedSearchResultIndex}`);
+            if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        } else if (!isSearching && subfolders.length > 0) {
+            highlightedFolderIndex = (highlightedFolderIndex - 1 + subfolders.length) % subfolders.length;
+            updateHighlightedUI();
+            scrollHighlightedIntoView();
+        }
+        return;
+    }
+
+    // Enter
+    if (e.key === "Enter") {
+        e.preventDefault();
+        if (isSearching && currentFolderSearchResults && currentFolderSearchResults.length > 0) {
+            const item = currentFolderSearchResults[highlightedSearchResultIndex];
+            if (item) {
+                enterSearchResultFolder(encodeURIComponent(item.full_path));
             }
-        } else if (e.key === "ArrowUp") {
-            e.preventDefault();
+        } else if (!isSearching) {
             if (subfolders.length > 0) {
-                highlightedFolderIndex = (highlightedFolderIndex - 1 + subfolders.length) % subfolders.length;
-                updateHighlightedUI();
-                scrollHighlightedIntoView();
-            }
-        } else if (e.key === "Enter" || e.key === "ArrowLeft") {
-            e.preventDefault();
-            if (e.ctrlKey) {
-                // Ctrl+Enter: confirm selection immediately
-                confirmCurrentFolderSelection();
-            } else if (subfolders.length > 0) {
                 handleItemClick(highlightedFolderIndex);
             } else {
-                // Leaf folder -> Select it directly on Enter!
                 confirmCurrentFolderSelection();
             }
-        } else if (e.key === "Backspace" || e.key === "ArrowRight") {
+        }
+        return;
+    }
+
+    // ArrowLeft (In RTL Hebrew, Left arrow moves forward / enters folder)
+    if (e.key === "ArrowLeft") {
+        if (isSearchFocused && searchInput.selectionStart !== searchInput.value.length) {
+            return;
+        }
+        e.preventDefault();
+        if (isSearching && currentFolderSearchResults && currentFolderSearchResults.length > 0) {
+            const item = currentFolderSearchResults[highlightedSearchResultIndex];
+            if (item) enterSearchResultFolder(encodeURIComponent(item.full_path));
+        } else if (!isSearching && subfolders.length > 0) {
+            handleItemClick(highlightedFolderIndex);
+        }
+        return;
+    }
+
+    // ArrowRight (In RTL Hebrew, Right arrow goes backward / up to parent)
+    if (e.key === "ArrowRight") {
+        if (isSearchFocused && (searchInput.value.length > 0 && searchInput.selectionStart > 0)) {
+            return;
+        }
+        e.preventDefault();
+        if (currentFolderData && currentFolderData.parent_path) {
+            fetchFolderContent(currentFolderData.parent_path);
+        }
+        return;
+    }
+
+    // Backspace: go back if search input is empty or focus not in input
+    if (e.key === "Backspace") {
+        if (!isSearchFocused || searchInput.value === "") {
             e.preventDefault();
             if (currentFolderData && currentFolderData.parent_path) {
                 fetchFolderContent(currentFolderData.parent_path);
             }
-        } else if (e.key === "Escape") {
-            closeFolderModal();
+        }
+    }
+}
+
+function handleLessonCardKeyDown(e, index, field) {
+    if (e.key === "Enter") {
+        if (e.ctrlKey) {
+            e.preventDefault();
+            const saveBtn = document.getElementById(`save-btn-${index}`);
+            if (saveBtn) saveBtn.click();
+            return;
+        }
+
+        e.preventDefault();
+        if (field === "rabbi") {
+            const topicInput = document.getElementById(`topic-${index}`);
+            if (topicInput) {
+                topicInput.focus();
+                topicInput.select();
+            }
+        } else if (field === "topic") {
+            const dateInput = document.getElementById(`date-${index}`);
+            if (dateInput) {
+                dateInput.focus();
+                dateInput.select();
+            }
+        } else if (field === "date") {
+            const destPath = document.getElementById(`dest-path-${index}`)?.value;
+            if (destPath) {
+                const saveBtn = document.getElementById(`save-btn-${index}`);
+                if (saveBtn) saveBtn.focus();
+            } else {
+                openFolderExplorer(index);
+            }
+        } else if (field === "folder") {
+            openFolderExplorer(index);
+        } else if (field === "save") {
+            const saveBtn = document.getElementById(`save-btn-${index}`);
+            if (saveBtn) saveBtn.click();
+        }
+    } else if (e.key === "ArrowDown") {
+        if (e.altKey) {
+            e.preventDefault();
+            focusLessonCard(index + 1);
+        } else if (e.target.tagName === "INPUT") {
+            const input = e.target;
+            if (input.selectionStart === input.value.length) {
+                e.preventDefault();
+                if (field === "rabbi") {
+                    const el = document.getElementById(`topic-${index}`);
+                    if (el) { el.focus(); el.select(); }
+                } else if (field === "topic") {
+                    const el = document.getElementById(`date-${index}`);
+                    if (el) { el.focus(); el.select(); }
+                } else if (field === "date") {
+                    document.getElementById(`folder-btn-${index}`)?.focus();
+                }
+            }
+        }
+    } else if (e.key === "ArrowUp") {
+        if (e.altKey) {
+            e.preventDefault();
+            focusLessonCard(index - 1);
+        } else if (e.target.tagName === "INPUT") {
+            const input = e.target;
+            if (input.selectionStart === 0 && input.selectionEnd === 0) {
+                e.preventDefault();
+                if (field === "topic") {
+                    const el = document.getElementById(`rabbi-${index}`);
+                    if (el) { el.focus(); el.select(); }
+                } else if (field === "date") {
+                    const el = document.getElementById(`topic-${index}`);
+                    if (el) { el.focus(); el.select(); }
+                }
+            }
+        }
+    }
+}
+
+function focusLessonCard(index) {
+    const card = document.getElementById(`card-${index}`);
+    if (!card) return;
+    card.scrollIntoView({ block: "center", behavior: "smooth" });
+    const rabbiInput = document.getElementById(`rabbi-${index}`);
+    if (rabbiInput) {
+        rabbiInput.focus();
+        rabbiInput.select();
+    }
+}
+
+function getActiveCardIndex() {
+    const activeEl = document.activeElement;
+    if (!activeEl) return null;
+    const card = activeEl.closest(".lesson-card");
+    if (!card) return null;
+    const match = card.id.match(/^card-(\d+)$/);
+    return match ? parseInt(match[1], 10) : null;
+}
+
+function navigateCardDelta(delta) {
+    const cards = Array.from(document.querySelectorAll(".lesson-card"));
+    if (cards.length === 0) return;
+    const currentActive = getActiveCardIndex();
+    if (currentActive === null) {
+        focusLessonCard(0);
+        return;
+    }
+    const currentCardIdx = cards.findIndex(c => c.id === `card-${currentActive}`);
+    const nextIdx = currentCardIdx + delta;
+    if (nextIdx >= 0 && nextIdx < cards.length) {
+        const nextIdMatch = cards[nextIdx].id.match(/^card-(\d+)$/);
+        if (nextIdMatch) {
+            focusLessonCard(parseInt(nextIdMatch[1], 10));
+        }
+    }
+}
+
+function handleEditModalKeyDown(e, field) {
+    if (e.key === "Enter") {
+        if (e.ctrlKey) {
+            e.preventDefault();
+            saveEditedLesson();
+            return;
+        }
+        e.preventDefault();
+        if (field === "rabbi") {
+            const topicInput = document.getElementById("edit-lesson-topic");
+            if (topicInput) {
+                topicInput.focus();
+                topicInput.select();
+            }
+        } else if (field === "topic") {
+            const dateInput = document.getElementById("edit-lesson-date");
+            if (dateInput) {
+                dateInput.focus();
+                dateInput.select();
+            }
+        } else if (field === "date") {
+            const dest = document.getElementById("edit-lesson-dest-path")?.value;
+            if (dest) {
+                document.getElementById("edit-lesson-save-btn")?.focus();
+            } else {
+                openFolderExplorer("edit-modal");
+            }
+        } else if (field === "folder") {
+            openFolderExplorer("edit-modal");
+        } else if (field === "save") {
+            saveEditedLesson();
+        }
+    }
+}
+
+// Global Keyboard Navigation Listener
+function setupKeyboardListeners() {
+    window.addEventListener("keydown", (e) => {
+        const folderModal = document.getElementById("folder-modal");
+        const editModal = document.getElementById("edit-lesson-modal");
+
+        // 1. If Folder Modal is Open
+        if (folderModal && folderModal.classList.contains("open")) {
+            handleFolderModalGlobalKeyDown(e);
+            return;
+        }
+
+        // 2. If Edit Lesson Modal is Open
+        if (editModal && editModal.classList.contains("open")) {
+            if (e.key === "Escape") {
+                e.preventDefault();
+                closeEditLessonModal();
+                return;
+            }
+            if (e.ctrlKey && e.key === "Enter") {
+                e.preventDefault();
+                saveEditedLesson();
+                return;
+            }
+            return;
+        }
+
+        // 3. Main Dashboard Navigation
+        // Alt + ArrowDown / PageDown: Next card
+        if ((e.altKey && e.key === "ArrowDown") || e.key === "PageDown") {
+            e.preventDefault();
+            navigateCardDelta(1);
+            return;
+        }
+        // Alt + ArrowUp / PageUp: Previous card
+        if ((e.altKey && e.key === "ArrowUp") || e.key === "PageUp") {
+            e.preventDefault();
+            navigateCardDelta(-1);
+            return;
+        }
+
+        // Alt + P: Audio play/pause for active card
+        if (e.altKey && (e.key === "p" || e.key === "P")) {
+            e.preventDefault();
+            const activeCard = getActiveCardIndex();
+            if (activeCard !== null) {
+                togglePlay(activeCard);
+            }
+            return;
         }
     });
 }
@@ -1026,12 +1294,15 @@ function fetchFolderByRelativePath(relPath) {
 }
 
 function confirmCurrentFolderSelection() {
+    const targetCard = activeCardIndex;
     if (activeCardIndex === "edit-modal" && currentFolderData) {
         document.getElementById("edit-lesson-dest-path").value = currentFolderData.current_full_path;
         document.getElementById("edit-lesson-folder-label").innerText = currentFolderData.current_rel_path || "ראשי (שרת הישיבה)";
+        setTimeout(() => document.getElementById("edit-lesson-save-btn")?.focus(), 60);
     } else if (activeCardIndex !== null && currentFolderData) {
         document.getElementById(`dest-path-${activeCardIndex}`).value = currentFolderData.current_full_path;
         document.getElementById(`folder-label-${activeCardIndex}`).innerText = currentFolderData.current_rel_path || "ראשי (שורש)";
+        setTimeout(() => document.getElementById(`save-btn-${targetCard}`)?.focus(), 60);
     }
     closeFolderModal();
 }
@@ -1119,10 +1390,12 @@ async function classifyLesson(index, encodedFilename, encodedSourcePath) {
             pendingLessons.splice(index, 1);
             document.getElementById("pending-count").innerText = pendingLessons.length;
             renderPendingFolders();
-            if (pendingLessons.length === 0) {
-                renderPendingLessons();
-            }
+            renderPendingLessons();
             alert(`✓ השיעור סווג והועבר בהצלחה לתיקיית הקבע:\n${data.filename}`);
+            const nextIdx = Math.min(index, pendingLessons.length - 1);
+            if (nextIdx >= 0) {
+                setTimeout(() => focusLessonCard(nextIdx), 60);
+            }
         } else {
             alert(data.detail || "שגיאה בסיווג השיעור");
             card.style.opacity = "1";
