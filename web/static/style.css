@@ -1977,3 +1977,85 @@ body {
     transform: translateY(-1px);
     box-shadow: 0 1px 3px rgba(67, 56, 202, 0.15);
 }
+
+
+/* ==========================================================================
+   Full Keyboard Navigation & Accessibility Styles (Arrows & Enter)
+   ========================================================================== */
+
+.modal-keyboard-hints {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    padding: 0.45rem 1rem;
+    background: #f8fafc;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    user-select: none;
+    direction: rtl;
+}
+
+.modal-keyboard-hints span {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.modal-keyboard-hints kbd {
+    display: inline-block;
+    padding: 0.15rem 0.35rem;
+    font-family: inherit;
+    font-size: 0.72rem;
+    font-weight: 700;
+    line-height: 1;
+    color: #1e293b;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.08);
+}
+
+.modal-keyboard-hints .hint-sep {
+    color: #cbd5e1;
+}
+
+/* Distinct Highlight in Folder Lists */
+.folder-row {
+    position: relative;
+    transition: all 0.15s ease-in-out;
+}
+
+.folder-row.highlighted {
+    background: #dbeafe !important;
+    border-color: #3b82f6 !important;
+    border-right: 4px solid var(--primary) !important;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25) !important;
+    transform: translateX(-2px);
+}
+
+.search-result-row.highlighted {
+    background: #eff6ff !important;
+    border-color: #3b82f6 !important;
+    border-right: 4px solid var(--primary) !important;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2) !important;
+    transform: translateX(-2px);
+}
+
+/* Prominent Lesson Card Focus State */
+.lesson-card {
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.lesson-card:focus-within {
+    border-color: #60a5fa !important;
+    box-shadow: 0 6px 20px rgba(37, 99, 235, 0.14) !important;
+}
+
+.input-text:focus-visible, .folder-select-btn:focus-visible, .btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.35) !important;
+}

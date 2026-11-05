@@ -217,7 +217,7 @@
 
                     <label>שם הרב:</label>
 
-                    <input type="text" class="input-text" id="edit-lesson-rabbi" placeholder="למשל: הרב אורי" required>
+                    <input type="text" class="input-text" id="edit-lesson-rabbi" placeholder="למשל: הרב אורי" required onkeydown="handleEditModalKeyDown(event, 'rabbi')">
 
                 </div>
 
@@ -225,7 +225,7 @@
 
                     <label>נושא / שם השיעור:</label>
 
-                    <input type="text" class="input-text" id="edit-lesson-topic" placeholder="למשל: פרשת כי תצא">
+                    <input type="text" class="input-text" id="edit-lesson-topic" placeholder="למשל: פרשת כי תצא" onkeydown="handleEditModalKeyDown(event, 'topic')">
 
                 </div>
 
@@ -233,7 +233,7 @@
 
                     <label>תאריך עברי:</label>
 
-                    <input type="text" class="input-text" id="edit-lesson-date">
+                    <input type="text" class="input-text" id="edit-lesson-date" onkeydown="handleEditModalKeyDown(event, 'date')">
 
                 </div>
 
@@ -243,7 +243,7 @@
 
                     <div class="folder-picker-wrap">
 
-                        <button type="button" class="folder-select-btn" id="folder-btn-edit" onclick="openFolderExplorer('edit-modal')">
+                        <button type="button" class="folder-select-btn" id="folder-btn-edit" onclick="openFolderExplorer('edit-modal')" onkeydown="handleEditModalKeyDown(event, 'folder')">
 
                             <span id="edit-lesson-folder-label">בחר תיקייה...</span>
 
@@ -263,7 +263,7 @@
 
                 <button class="btn btn-outline" onclick="closeEditLessonModal()">ביטול</button>
 
-                <button class="btn btn-success" id="edit-lesson-save-btn" onclick="saveEditedLesson()">
+                <button class="btn btn-success" id="edit-lesson-save-btn" onclick="saveEditedLesson()" onkeydown="handleEditModalKeyDown(event, 'save')">
 
                     💾 שמור שינויים וסמן כטופל
 
@@ -325,6 +325,19 @@
 
                 </div>
 
+            </div>
+
+            <!-- Keyboard Navigation Hints Bar -->
+            <div class="modal-keyboard-hints">
+                <span><kbd>↑</kbd><kbd>↓</kbd> ניווט</span>
+                <span class="hint-sep">•</span>
+                <span><kbd>↵</kbd> כניסה / בחירה</span>
+                <span class="hint-sep">•</span>
+                <span><kbd>→</kbd> חזרה למעלה</span>
+                <span class="hint-sep">•</span>
+                <span><kbd>Ctrl</kbd>+<kbd>↵</kbd> בחירה מיידית</span>
+                <span class="hint-sep">•</span>
+                <span><kbd>Esc</kbd> יציאה</span>
             </div>
 
             <div class="modal-footer">
