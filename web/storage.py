@@ -87,6 +87,11 @@ def get_recorder_source(filename: str, filepath: Optional[Path] = None) -> Optio
     if clean_fn in sources:
         return sources[clean_fn]
 
+    # Check base filename without duplicate suffix e.g. '_1.mp3', '_2.mp3'
+    base_match = re.sub(r'_\d+\.mp3$', '.mp3', clean_fn, flags=re.IGNORECASE)
+    if base_match != clean_fn and base_match in sources:
+        return sources[base_match]
+
     # Try reading from ID3 tag if filepath exists
     if filepath and filepath.exists() and filepath.suffix.lower() == ".mp3":
         try:
@@ -117,6 +122,25 @@ def set_recorder_source(filename: str, source_label: str):
             json.dump(sources, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
+
+def set_all_recorders_source(old_label: str, new_label: str):
+    global _RECORDER_SOURCES_CACHE
+    sources = get_recorder_sources()
+    norm_old = normalize_recorder_label(old_label) or old_label.strip()
+    norm_new = normalize_recorder_label(new_label) or new_label.strip()
+    updated = False
+    for fn, lbl in list(sources.items()):
+        if lbl == norm_old or lbl == old_label:
+            sources[fn] = norm_new
+            updated = True
+    if updated:
+        _RECORDER_SOURCES_CACHE = sources
+        try:
+            RECORDER_SOURCES_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(RECORDER_SOURCES_FILE, "w", encoding="utf-8") as f:
+                json.dump(sources, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
 def remove_recorder_source(filename: str):
     global _RECORDER_SOURCES_CACHE

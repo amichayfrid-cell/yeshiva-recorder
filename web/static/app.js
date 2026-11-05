@@ -190,7 +190,18 @@ function renderPendingFolders() {
     foldersSection.style.display = "block";
 
     const uploadCount = pendingLessons.filter(l => l.source === 'upload').length;
-    const recorderCount = pendingLessons.filter(l => l.source !== 'upload').length;
+    const recorderLessons = pendingLessons.filter(l => l.source !== 'upload');
+    const recorderCount = recorderLessons.length;
+
+    let primaryRecorderLabel = "מקלט 1";
+    if (recorderLessons.length > 0) {
+        const labelCounts = {};
+        recorderLessons.forEach(l => {
+            const lbl = l.source_label || "מקלט 1";
+            labelCounts[lbl] = (labelCounts[lbl] || 0) + 1;
+        });
+        primaryRecorderLabel = Object.keys(labelCounts).reduce((a, b) => labelCounts[a] > labelCounts[b] ? a : b);
+    }
 
     const uploadSubText = uploadCount > 0 ? `${uploadCount} שיעורים` : 'אין שיעורים';
     const recorderSubText = recorderCount > 0 ? `${recorderCount} שיעורים` : 'אין שיעורים';
@@ -206,13 +217,13 @@ function renderPendingFolders() {
         <div class="folder-card ${currentPendingSource === 'recorder' ? 'selected' : ''}" onclick="selectPendingFolder('recorder')">
             <span class="folder-icon">📁</span>
             <div style="flex: 1; min-width: 0;">
-                <div class="folder-name" title="שיעורים למיון (מקלט שמע)">שיעורים למיון (מקלט שמע)</div>
+                <div class="folder-name" title="שיעורים למיון (${primaryRecorderLabel})">שיעורים למיון (${primaryRecorderLabel})</div>
                 <div class="folder-sub">${recorderSubText}</div>
             </div>
         </div>
     `;
 
-    renderFolderBar(uploadCount, recorderCount);
+    renderFolderBar(uploadCount, recorderCount, primaryRecorderLabel);
 }
 
 function selectPendingFolder(source) {
@@ -225,7 +236,7 @@ function selectPendingFolder(source) {
     renderPendingLessons();
 }
 
-function renderFolderBar(uploadCount, recorderCount) {
+function renderFolderBar(uploadCount, recorderCount, primaryRecorderLabel = "מקלט 1") {
     syncSortOrderUI();
     const folderBar = document.getElementById("current-folder-bar");
     const breadcrumbs = document.getElementById("pending-breadcrumbs");
@@ -249,7 +260,8 @@ function renderFolderBar(uploadCount, recorderCount) {
         breadcrumbs.innerHTML = `
             <span class="breadcrumb-crumb" onclick="selectPendingFolder(null)" title="חזור לכל התיקיות">📁 תיקיות</span>
             <span class="breadcrumb-sep">❮</span>
-            <span>🎙️ שיעורים למיון - מקלט שמע (${recorderCount} שיעורים)</span>
+            <span>🎙️ שיעורים למיון - ${escapeHtml(primaryRecorderLabel)} (${recorderCount} שיעורים)</span>
+            <button type="button" class="btn-secondary" style="font-size:0.75rem; padding: 2px 8px; margin-right: 8px; border-radius: 4px; cursor: pointer;" onclick="editAllRecorderNames('${escapeHtml(primaryRecorderLabel)}')" title="שנה את שם המקלט לכל השיעורים">✏️ שנה שם מקלט</button>
         `;
     }
 
@@ -331,7 +343,7 @@ function renderPendingLessons() {
 
         const sourceBadge = lesson.source === 'upload'
             ? `<span class="badge badge-source-upload" title="שיעור שהועלה לתיקיית העלאת שיעורים">📤 העלאת שיעורים</span>`
-            : `<span class="badge badge-source-recorder" title="לחץ לשינוי שם המקלט (למשל: מקלט 4)" onclick="editRecorderName('${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}', '${escapeHtml(lesson.source_label || "מקלט שמע")}')" style="cursor: pointer; user-select: none;">🎙️ ${escapeHtml(lesson.source_label || "מקלט שמע")}</span>`;
+            : `<span class="badge badge-source-recorder" title="לחץ לשינוי שם המקלט (למשל: מקלט 4)" onclick="editRecorderName('${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}', '${escapeHtml(lesson.source_label || "מקלט 1")}')" style="cursor: pointer; user-select: none;">🎙️ ${escapeHtml(lesson.source_label || "מקלט 1")} ✏️</span>`;
 
         return `
             <div class="lesson-card" id="card-${index}">
@@ -358,7 +370,7 @@ function renderPendingLessons() {
                         <input type="range" class="seek-bar" id="seek-${index}" value="0" min="0" step="0.1" onchange="seekAudio('${index}')">
                         <span class="time-display" id="time-${index}">00:00 / --:--</span>
                     </div>
-                    <audio id="audio-${index}" src="/api/audio/stream?filename=${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}&source_path=${encodeURIComponent(lesson.full_path || '').replace(/'/g, '%27')}" preload="none" ontimeupdate="updateProgress('${index}')" onloadedmetadata="initAudioDuration('${index}')" onended="onAudioEnded('${index}')"></audio>
+                    <audio id="audio-${index}" src="/api/audio/stream?filename=${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}&source_path=${encodeURIComponent(lesson.full_path || '').replace(/'/g, '%27')}" preload="metadata" ontimeupdate="updateProgress('${index}')" onloadedmetadata="initAudioDuration('${index}')" ondurationchange="initAudioDuration('${index}')" onended="onAudioEnded('${index}')" onerror="onAudioError('${index}')"></audio>
                 </div>
 
                 <!-- Classification Form Grid -->
@@ -403,6 +415,7 @@ function renderPendingLessons() {
 function togglePlay(index) {
     const audio = document.getElementById(`audio-${index}`);
     const btn = document.getElementById(`play-btn-${index}`);
+    if (!audio) return;
 
     if (currentAudio && currentAudio !== audio) {
         currentAudio.pause();
@@ -410,10 +423,18 @@ function togglePlay(index) {
     }
 
     if (audio.paused) {
-        audio.play().catch(e => console.warn("Play interrupted:", e));
-        btn.innerText = "⏸";
-        currentAudio = audio;
-        currentPlayBtn = btn;
+        // Rewind to beginning if audio reached or is near the end
+        if (audio.ended || (audio.duration && audio.currentTime >= audio.duration - 0.2)) {
+            audio.currentTime = 0;
+        }
+        audio.play().then(() => {
+            btn.innerText = "⏸";
+            currentAudio = audio;
+            currentPlayBtn = btn;
+        }).catch(e => {
+            console.warn("Play interrupted or failed:", e);
+            btn.innerText = "▶";
+        });
     } else {
         audio.pause();
         btn.innerText = "▶";
@@ -431,20 +452,30 @@ function updateProgress(index) {
     const audio = document.getElementById(`audio-${index}`);
     const seek = document.getElementById(`seek-${index}`);
     const timeDisplay = document.getElementById(`time-${index}`);
+    if (!audio) return;
 
-    if (audio && audio.duration && isFinite(audio.duration)) {
-        seek.value = (audio.currentTime / audio.duration) * 100;
-        timeDisplay.innerText = `${formatTime(audio.currentTime)} / ${formatTime(audio.duration)}`;
-    } else if (audio && !isNaN(audio.currentTime)) {
-        timeDisplay.innerText = `${formatTime(audio.currentTime)} / --:--`;
+    let current = audio.currentTime || 0;
+    let total = audio.duration;
+
+    if (total && isFinite(total) && total > 0) {
+        if (current > total) {
+            total = current;
+        }
+        if (seek) seek.value = Math.min(100, (current / total) * 100);
+        if (timeDisplay) timeDisplay.innerText = `${formatTime(current)} / ${formatTime(total)}`;
+    } else if (!isNaN(current)) {
+        if (seek) seek.value = 0;
+        if (timeDisplay) timeDisplay.innerText = `${formatTime(current)} / --:--`;
     }
 }
 
 function initAudioDuration(index) {
     const audio = document.getElementById(`audio-${index}`);
     const timeDisplay = document.getElementById(`time-${index}`);
-    if (audio && audio.duration && isFinite(audio.duration)) {
-        timeDisplay.innerText = `00:00 / ${formatTime(audio.duration)}`;
+    if (audio && audio.duration && isFinite(audio.duration) && audio.duration > 0) {
+        let current = audio.currentTime || 0;
+        let total = Math.max(audio.duration, current);
+        timeDisplay.innerText = `${formatTime(current)} / ${formatTime(total)}`;
     }
 }
 
@@ -459,6 +490,28 @@ function seekAudio(index) {
 function onAudioEnded(index) {
     const btn = document.getElementById(`play-btn-${index}`);
     if (btn) btn.innerText = "▶";
+    const audio = document.getElementById(`audio-${index}`);
+    const seek = document.getElementById(`seek-${index}`);
+    const timeDisplay = document.getElementById(`time-${index}`);
+    if (audio) {
+        audio.currentTime = 0;
+    }
+    if (seek) seek.value = 0;
+    if (audio && audio.duration && isFinite(audio.duration)) {
+        if (timeDisplay) timeDisplay.innerText = `00:00 / ${formatTime(audio.duration)}`;
+    }
+}
+
+function onAudioError(index) {
+    const audio = document.getElementById(`audio-${index}`);
+    const btn = document.getElementById(`play-btn-${index}`);
+    const timeDisplay = document.getElementById(`time-${index}`);
+    console.warn(`Audio loading error for ${index}:`, audio ? audio.error : null);
+    if (btn) btn.innerText = "▶";
+    if (timeDisplay) {
+        timeDisplay.innerText = "שגיאת שמע";
+        timeDisplay.style.color = "var(--danger)";
+    }
 }
 
 function formatTime(seconds) {
@@ -843,19 +896,10 @@ function renderExplorerView() {
     const audioFiles = currentFolderData.audio_files || [];
     let audioFilesHtml = "";
     if (audioFiles.length > 0) {
-        const isWeeklyFolder = (
-            (currentFolderData.current_name && currentFolderData.current_name.trim() === "שיעורי השבוע") ||
-            (currentFolderData.current_rel_path && (
-                currentFolderData.current_rel_path.trim() === "שיעורי השבוע" ||
-                currentFolderData.current_rel_path.startsWith("שיעורי השבוע/") ||
-                currentFolderData.current_rel_path.startsWith("שיעורי השבוע\\")
-            )) ||
-            (currentFolderData.current_full_path && (
-                currentFolderData.current_full_path.endsWith("/שיעורי השבוע") ||
-                currentFolderData.current_full_path.endsWith("\\שיעורי השבוע") ||
-                currentFolderData.current_full_path.includes("/שיעורי השבוע/") ||
-                currentFolderData.current_full_path.includes("\\שיעורי השבוע\\")
-            ))
+        const isWeeklyFolder = Boolean(
+            (currentFolderData.current_name && currentFolderData.current_name.includes("שיעורי השבוע")) ||
+            (currentFolderData.current_rel_path && currentFolderData.current_rel_path.includes("שיעורי השבוע")) ||
+            (currentFolderData.current_full_path && currentFolderData.current_full_path.includes("שיעורי השבוע"))
         );
 
         audioFilesHtml = `
@@ -1589,21 +1633,68 @@ function escapeHtml(str) {
 // Edit Recorder Name directly from badge
 async function editRecorderName(encodedFilename, currentLabel) {
     const filename = decodeURIComponent(encodedFilename);
-    const newName = prompt("הזן שם עבור מקלט זה (למשל: מקלט 4, מקלט א, בית מדרש):", currentLabel || "מקלט שמע");
+    const newName = prompt("הזן שם עבור מקלט זה (למשל: מקלט 4, מקלט א, בית מדרש):", currentLabel || "מקלט 1");
     if (!newName || newName.trim() === "" || newName.trim() === currentLabel) return;
+
+    const trimmedNew = newName.trim();
+    const matchingCount = pendingLessons.filter(l => (l.source_label || "מקלט 1") === currentLabel).length;
+    let updateAll = false;
+    if (matchingCount > 1) {
+        updateAll = confirm(`נמצאו ${matchingCount} שיעורים שמקורם ב-${currentLabel}.\n\nהאם לעדכן את כולם לשם '${trimmedNew}'?`);
+    }
 
     try {
         const form = new FormData();
         form.append("filename", filename);
-        form.append("recorder_label", newName.trim());
+        form.append("recorder_label", trimmedNew);
+        form.append("update_all", updateAll ? "true" : "false");
+        form.append("old_label", currentLabel);
+
         const res = await fetch("/api/lessons/set_recorder_source", { method: "POST", body: form });
         const data = await res.json();
         if (data.status === "success") {
-            const lesson = pendingLessons.find(l => l.filename === filename);
-            if (lesson) {
-                lesson.source_label = data.recorder_label;
-                renderPendingLessons();
+            if (updateAll) {
+                pendingLessons.forEach(l => {
+                    if ((l.source_label || "מקלט 1") === currentLabel) {
+                        l.source_label = data.recorder_label;
+                    }
+                });
+            } else {
+                const lesson = pendingLessons.find(l => l.filename === filename);
+                if (lesson) {
+                    lesson.source_label = data.recorder_label;
+                }
             }
+            renderPendingFolders();
+            renderPendingLessons();
+        }
+    } catch (e) {
+        alert("שגיאה בעדכון שם המקלט: " + e.message);
+    }
+}
+
+async function editAllRecorderNames(currentLabel) {
+    const newName = prompt(`הזן שם חדש עבור כל השיעורים שהוקלטו ב-${currentLabel} (למשל: מקלט 4):`, currentLabel || "מקלט 1");
+    if (!newName || newName.trim() === "" || newName.trim() === currentLabel) return;
+    const trimmedNew = newName.trim();
+
+    try {
+        const form = new FormData();
+        form.append("filename", "");
+        form.append("recorder_label", trimmedNew);
+        form.append("update_all", "true");
+        form.append("old_label", currentLabel);
+
+        const res = await fetch("/api/lessons/set_recorder_source", { method: "POST", body: form });
+        const data = await res.json();
+        if (data.status === "success") {
+            pendingLessons.forEach(l => {
+                if (l.source === 'recorder' && (!l.source_label || l.source_label === currentLabel || l.source_label === "מקלט שמע")) {
+                    l.source_label = data.recorder_label;
+                }
+            });
+            renderPendingFolders();
+            renderPendingLessons();
         }
     } catch (e) {
         alert("שגיאה בעדכון שם המקלט: " + e.message);
@@ -1679,17 +1770,27 @@ function normalizeHebrewQuotes(s) {
     return s.replace(/['׳’‘`]/g, "'").replace(/["״”“]|''/g, '"').trim().toLowerCase();
 }
 
+function hebrewCompareKey(s) {
+    if (!s) return "";
+    return s.replace(/\.(mp3|wav|m4a|ogg|wma)$/i, "")
+            .replace(/['׳’‘`"״”“]|''/g, "")
+            .replace(/[\s_()\-–—.,/\\:;!?[\]{}]+/g, "")
+            .trim()
+            .toLowerCase();
+}
+
 async function openEditFromExplorer(encodedFilename, btnElement = null) {
     const filename = decodeURIComponent(encodedFilename);
     if (!currentFolderData) return;
 
     stopModalAudioPreview();
 
-    // Check if there is an open note for this file with Hebrew quote tolerance
+    // Check if there is an open note for this file with Hebrew quote and geresh tolerance
     const normFile = normalizeHebrewQuotes(filename);
+    const keyFile = hebrewCompareKey(filename);
     const matchingNote = (allNotes || []).find(n => {
         const nBase = (n.filename || "").replace(/\\/g, "/").split("/").pop();
-        return normalizeHebrewQuotes(nBase) === normFile && n.status === "open";
+        return (normalizeHebrewQuotes(nBase) === normFile || (keyFile && hebrewCompareKey(nBase) === keyFile)) && n.status === "open";
     });
 
     const noteId = matchingNote ? matchingNote.id : null;
@@ -1737,6 +1838,7 @@ async function openEditLessonModal(encodedFilename, noteId, btnElement = null, f
         origPath = forcedFolderPath + "/" + filename;
     } else if (note && note.original_path) {
         origPath = note.original_path;
+        folderPath = note.original_path.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
     } else if (currentFolderData && currentFolderData.current_full_path) {
         folderPath = currentFolderData.current_full_path;
         origPath = folderPath + "/" + filename;

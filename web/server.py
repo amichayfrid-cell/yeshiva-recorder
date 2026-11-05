@@ -31,13 +31,30 @@ app = FastAPI(title="מערכת מיון שיעורי הישיבה", version="2.
 
 try:
     from starlette.middleware.gzip import GZipMiddleware
-    app.add_middleware(GZipMiddleware, minimum_size=1000)
-except Exception:
-    try:
-        from fastapi.middleware.gzip import GZipMiddleware
-        app.add_middleware(GZipMiddleware, minimum_size=1000)
-    except Exception:
-        pass
+    from starlette.types import ASGIApp, Receive, Scope, Send
+
+    class SafeGZipMiddleware:
+        """
+        GZip compression middleware that exempts audio/video streaming endpoints.
+        Audio files (MP3, WAV, AAC, M4A) are already compressed; compressing them
+        breaks HTML5 <audio> Range requests and causes playback decode failures.
+        """
+        def __init__(self, app: ASGIApp, minimum_size: int = 1000):
+            self.app = app
+            self.gzip_middleware = GZipMiddleware(app, minimum_size=minimum_size)
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send):
+            if scope["type"] == "http":
+                path = scope.get("path", "")
+                if path.startswith("/api/audio"):
+                    # Pass through raw uncompressed audio bytes directly
+                    await self.app(scope, receive, send)
+                    return
+            await self.gzip_middleware(scope, receive, send)
+
+    app.add_middleware(SafeGZipMiddleware, minimum_size=1000)
+except Exception as e:
+    print(f"SafeGZipMiddleware init skipped: {e}")
 
 @app.middleware("http")
 async def add_performance_cache_headers(request: Request, call_next):
@@ -244,7 +261,9 @@ def serve_static_audio_range(file_path: Path, mime_type: str, request: Optional[
             "Accept-Ranges": "bytes",
             "Content-Length": str(file_size),
             "Content-Type": mime_type,
-            "Cache-Control": "private, max-age=86400"
+            "Content-Encoding": "identity",
+            "Cache-Control": "private, max-age=86400",
+            "Content-Disposition": f'inline; filename="{file_path.name}"'
         }
         if file_size <= 8 * 1024 * 1024:
             with open(file_path, "rb") as f:
@@ -272,6 +291,7 @@ def serve_static_audio_range(file_path: Path, mime_type: str, request: Optional[
             "Accept-Ranges": "bytes",
             "Content-Length": str(length),
             "Content-Type": mime_type,
+            "Content-Encoding": "identity",
             "Cache-Control": "private, max-age=86400"
         }
 
@@ -474,7 +494,7 @@ def list_pending_lessons(request: Request):
     # Target 1: USB Ingestion / needs_review directory
     sorting_dir = get_sorting_dir()
     scan_sources = [
-        (sorting_dir, "recorder", "מקלט שמע", "badge-source-recorder")
+        (sorting_dir, "recorder", "מקלט 1", "badge-source-recorder")
     ]
     
     # Target 2: Upload directory (\\mdserver\העלאת שיעורים)
@@ -549,16 +569,30 @@ def list_pending_lessons(request: Request):
     return JSONResponse(result_payload)
 
 @app.post("/api/lessons/set_recorder_source")
-def set_recorder_source(request: Request, filename: str = Form(...), recorder_label: str = Form(...)):
+def set_recorder_source(
+    request: Request, 
+    filename: Optional[str] = Form(""), 
+    recorder_label: str = Form(...),
+    update_all: Optional[str] = Form("false"),
+    old_label: Optional[str] = Form(None)
+):
     if not is_authenticated(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    clean_fn = os.path.basename(filename.replace('\\', '/'))
+    clean_fn = os.path.basename((filename or "").replace('\\', '/'))
     clean_label = storage.normalize_recorder_label(recorder_label) or recorder_label.strip()
     if not clean_label:
-        clean_label = "מקלט שמע"
+        clean_label = "מקלט 1"
 
-    storage.set_recorder_source(clean_fn, clean_label)
+    if clean_fn:
+        storage.set_recorder_source(clean_fn, clean_label)
+
+    is_update_all = str(update_all).lower() in ("true", "1", "yes")
+    if is_update_all:
+        storage.set_all_recorders_source(old_label or "מקלט שמע", clean_label)
+        if old_label and old_label != "מקלט שמע":
+            storage.set_all_recorders_source("מקלט שמע", clean_label)
+
     invalidate_pending_lessons_cache()
     return JSONResponse({"status": "success", "filename": clean_fn, "recorder_label": clean_label})
 
@@ -567,7 +601,18 @@ def stream_audio(request: Request, filename: str = Query(...), source_path: Opti
     if not is_authenticated(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    file_path = locate_lesson_file(source_path or filename, original_path=source_path)
+    file_path = None
+    if source_path:
+        p = Path(source_path)
+        try:
+            if p.is_file():
+                file_path = p
+        except Exception:
+            pass
+
+    if not file_path:
+        file_path = locate_lesson_file(source_path or filename, original_path=source_path)
+
     if not file_path or not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
 
@@ -714,10 +759,35 @@ def normalize_hebrew_string(s: str) -> str:
     s = s.replace('\u05f4', '"').replace('\u201c', '"').replace('\u201d', '"').replace("''", '"')
     return s.strip()
 
+def hebrew_compare_key(s: str) -> str:
+    """
+    Ultra-aggressive normalization for Hebrew file and folder matching:
+    - Strips all quotes (", '', ״, ”)
+    - Strips all apostrophes (', ׳, ’, `)
+    - Strips all dashes, underscores, spaces, brackets, punctuation
+    - Strips common audio extensions (.mp3, .wav, .m4a, .ogg, .wma)
+    - Lowers case
+    Example:
+      "ר' אליאב שניצר (כא אלול פו).mp3" -> "ראליאבשניצרכאאלולפו"
+      "ר אליאב שניצר (כא אלול פו).mp3"  -> "ראליאבשניצרכאאלולפו" (Exact match!)
+      "שנת התשפ"ז"                      -> "שנתהתשפז"
+      "שנת התשפ''ז"                     -> "שנתהתשפז" (Exact match!)
+    """
+    if not s:
+        return ""
+    s = unicodedata.normalize('NFC', str(s))
+    s = re.sub(r'\.(mp3|wav|m4a|ogg|wma)$', '', s, flags=re.IGNORECASE)
+    s = s.replace('\u05f3', '').replace('\u05f4', '')
+    s = s.replace("''", '').replace('"', '').replace("'", '').replace('`', '').replace('״', '').replace('׳', '').replace('”', '').replace('“', '')
+    s = re.sub(r'[\s_()\-–—.,/\\:;!?[\]{}]+', '', s)
+    return s.strip().lower()
+
 def resolve_path_with_fuzzy_hebrew(base_dir: Path, relative_parts: List[str]) -> Optional[Path]:
     """
     Traverses from base_dir through relative_parts segment by segment.
-    At each step, if direct match fails, checks children using normalize_hebrew_string.
+    At each step, if direct match fails, checks children using:
+    1. normalize_hebrew_string
+    2. hebrew_compare_key
     """
     try:
         if not base_dir.exists():
@@ -738,11 +808,15 @@ def resolve_path_with_fuzzy_hebrew(base_dir: Path, relative_parts: List[str]) ->
             pass
 
         norm_part = normalize_hebrew_string(part).lower()
+        key_part = hebrew_compare_key(part)
         matched = None
         try:
             with os.scandir(str(current)) as it:
                 for entry in it:
                     if normalize_hebrew_string(entry.name).lower() == norm_part:
+                        matched = Path(entry.path)
+                        break
+                    if key_part and hebrew_compare_key(entry.name) == key_part:
                         matched = Path(entry.path)
                         break
         except Exception:
@@ -783,6 +857,12 @@ def resolve_possible_local_paths(path_str: str) -> List[Path]:
     if clean_no_prefix.startswith('//'):
         clean_no_prefix = re.sub(r'^//[^/]+/[^/]+[/]?', '', clean_no_prefix)
 
+    # Strip Linux mount roots if absolute path was passed
+    for mnt in ["/mnt/yeshiva_share", "/mnt/yeshiva_upload", "/mnt/needs_review", "/mnt/local_staging"]:
+        if clean_no_prefix.startswith(mnt):
+            clean_no_prefix = clean_no_prefix[len(mnt):]
+            break
+
     clean_no_prefix = clean_no_prefix.lstrip('/')
     parts = [p for p in clean_no_prefix.split('/') if p]
 
@@ -813,21 +893,21 @@ def locate_lesson_file(
     folder_path: Optional[str] = None
 ) -> Optional[Path]:
     """
-    High-performance lesson locator with fuzzy Hebrew quote and geresh matching.
-    Resolves paths instantly without blocking:
-    1. Checks folder_path if provided directly (<1ms)
-    2. Checks translated original_path (<1ms)
-    3. Checks filename if it's already a full path (<1ms)
-    4. Checks in-memory cache (<1ms)
-    5. Checks sorting directory (<1ms)
-    6. Checks upload directories (<1ms)
-    7. Checks student notes database for recorded path (<1ms)
-    8. Checks target folder candidates from storage.get_all_folders_flat() (<2ms)
-    9. Checks shallow semester/year folders (<5ms)
-    10. Only as last resort, crawls with fuzzy Hebrew comparison.
+    High-performance lesson locator with fuzzy Hebrew quote, geresh and whitespace matching.
+    Resolves paths in <20ms without blocking SMB walks:
+    1. Direct check in folder_path with exact + fuzzy Hebrew (<1ms)
+    2. Check translated original_path with fuzzy Hebrew (<1ms)
+    3. Check filename if it's already a full path (<1ms)
+    4. Check in-memory location cache (<1ms)
+    5. Check sorting directory (<1ms)
+    6. Check upload directories (<1ms)
+    7. Check student notes database (<1ms)
+    8. Check candidate subfolders from storage.get_all_folders_flat() (<15ms)
+    9. Check shallow semester/year folders (<10ms)
     """
     clean_fn = os.path.basename(filename.replace('\\', '/'))
     norm_fn = normalize_hebrew_string(clean_fn).lower()
+    fn_key = hebrew_compare_key(clean_fn)
 
     # 1. Direct check in folder_path if supplied (e.g. from folder explorer)
     if folder_path:
@@ -837,11 +917,21 @@ def locate_lesson_file(
                     direct_p = f_base / clean_fn
                     if direct_p.is_file():
                         _FILE_LOCATION_CACHE[clean_fn] = direct_p
+                        _FILE_LOCATION_CACHE[fn_key] = direct_p
                         return direct_p
                     fuzzy_p = resolve_path_with_fuzzy_hebrew(f_base, [clean_fn])
                     if fuzzy_p and fuzzy_p.is_file():
                         _FILE_LOCATION_CACHE[clean_fn] = fuzzy_p
+                        _FILE_LOCATION_CACHE[fn_key] = fuzzy_p
                         return fuzzy_p
+                    # Check directory entries with hebrew_compare_key
+                    with os.scandir(str(f_base)) as it:
+                        for entry in it:
+                            if entry.is_file() and hebrew_compare_key(entry.name) == fn_key:
+                                found = Path(entry.path)
+                                _FILE_LOCATION_CACHE[clean_fn] = found
+                                _FILE_LOCATION_CACHE[fn_key] = found
+                                return found
             except OSError:
                 pass
 
@@ -851,7 +941,16 @@ def locate_lesson_file(
             try:
                 if cand.is_file():
                     _FILE_LOCATION_CACHE[clean_fn] = cand
+                    _FILE_LOCATION_CACHE[fn_key] = cand
                     return cand
+                if cand.parent.is_dir():
+                    with os.scandir(str(cand.parent)) as it:
+                        for entry in it:
+                            if entry.is_file() and hebrew_compare_key(entry.name) == fn_key:
+                                found = Path(entry.path)
+                                _FILE_LOCATION_CACHE[clean_fn] = found
+                                _FILE_LOCATION_CACHE[fn_key] = found
+                                return found
             except OSError:
                 pass
 
@@ -860,6 +959,7 @@ def locate_lesson_file(
         try:
             if cand.is_file():
                 _FILE_LOCATION_CACHE[clean_fn] = cand
+                _FILE_LOCATION_CACHE[fn_key] = cand
                 return cand
         except OSError:
             pass
@@ -873,17 +973,34 @@ def locate_lesson_file(
         except OSError:
             _FILE_LOCATION_CACHE.pop(clean_fn, None)
 
-    # 5. Check sorting directory (incoming / staging / needs_review)
+    if fn_key in _FILE_LOCATION_CACHE:
+        cached_p = _FILE_LOCATION_CACHE[fn_key]
+        try:
+            if cached_p.is_file():
+                return cached_p
+        except OSError:
+            _FILE_LOCATION_CACHE.pop(fn_key, None)
+
+    # 5. Check sorting directory (incoming / staging / needs_review / שיעורי השבוע)
     sorting_dir = get_sorting_dir()
     try:
         p_sort = sorting_dir / clean_fn
         if p_sort.is_file():
             _FILE_LOCATION_CACHE[clean_fn] = p_sort
+            _FILE_LOCATION_CACHE[fn_key] = p_sort
             return p_sort
         fuzzy_sort = resolve_path_with_fuzzy_hebrew(sorting_dir, [clean_fn])
         if fuzzy_sort and fuzzy_sort.is_file():
             _FILE_LOCATION_CACHE[clean_fn] = fuzzy_sort
+            _FILE_LOCATION_CACHE[fn_key] = fuzzy_sort
             return fuzzy_sort
+        with os.scandir(str(sorting_dir)) as it:
+            for entry in it:
+                if entry.is_file() and hebrew_compare_key(entry.name) == fn_key:
+                    found = Path(entry.path)
+                    _FILE_LOCATION_CACHE[clean_fn] = found
+                    _FILE_LOCATION_CACHE[fn_key] = found
+                    return found
     except OSError:
         pass
 
@@ -894,11 +1011,20 @@ def locate_lesson_file(
                 p_up = upload_dir / clean_fn
                 if p_up.is_file():
                     _FILE_LOCATION_CACHE[clean_fn] = p_up
+                    _FILE_LOCATION_CACHE[fn_key] = p_up
                     return p_up
                 fuzzy_up = resolve_path_with_fuzzy_hebrew(upload_dir, [clean_fn])
                 if fuzzy_up and fuzzy_up.is_file():
                     _FILE_LOCATION_CACHE[clean_fn] = fuzzy_up
+                    _FILE_LOCATION_CACHE[fn_key] = fuzzy_up
                     return fuzzy_up
+                with os.scandir(str(upload_dir)) as it:
+                    for entry in it:
+                        if entry.is_file() and hebrew_compare_key(entry.name) == fn_key:
+                            found = Path(entry.path)
+                            _FILE_LOCATION_CACHE[clean_fn] = found
+                            _FILE_LOCATION_CACHE[fn_key] = found
+                            return found
             except OSError:
                 pass
 
@@ -906,12 +1032,21 @@ def locate_lesson_file(
     try:
         for n in storage.get_notes_data():
             n_fn = os.path.basename(n.get("filename", "").replace('\\', '/'))
-            if normalize_hebrew_string(n_fn).lower() == norm_fn and n.get("original_path"):
+            if (normalize_hebrew_string(n_fn).lower() == norm_fn or hebrew_compare_key(n_fn) == fn_key) and n.get("original_path"):
                 for cand in resolve_possible_local_paths(n["original_path"]):
                     try:
                         if cand.is_file():
                             _FILE_LOCATION_CACHE[clean_fn] = cand
+                            _FILE_LOCATION_CACHE[fn_key] = cand
                             return cand
+                        if cand.parent.is_dir():
+                            with os.scandir(str(cand.parent)) as it:
+                                for entry in it:
+                                    if entry.is_file() and hebrew_compare_key(entry.name) == fn_key:
+                                        found = Path(entry.path)
+                                        _FILE_LOCATION_CACHE[clean_fn] = found
+                                        _FILE_LOCATION_CACHE[fn_key] = found
+                                        return found
                     except OSError:
                         pass
     except Exception:
@@ -921,10 +1056,14 @@ def locate_lesson_file(
     try:
         all_folders = storage.get_all_folders_flat()
         fn_words = [w for w in re.split(r'[\s_()\-"]+', norm_fn) if len(w) >= 3 and not w.endswith('.mp3')]
+        extra_words = [re.sub(r'[^\wא-ת]', '', w) for w in fn_words if len(re.sub(r'[^\wא-ת]', '', w)) >= 3]
+        all_search_words = set(fn_words + extra_words)
+
         candidate_folders = []
         for fold in all_folders:
             fold_name_norm = normalize_hebrew_string(fold.get("name", "")).lower()
-            if any(w in fold_name_norm for w in fn_words):
+            fold_bread_norm = normalize_hebrew_string(fold.get("breadcrumb", "")).lower()
+            if any(w in fold_name_norm or w in fold_bread_norm for w in all_search_words):
                 candidate_folders.append(fold)
 
         for cand_fold in candidate_folders:
@@ -934,13 +1073,21 @@ def locate_lesson_file(
                     fuzzy_p = resolve_path_with_fuzzy_hebrew(f_path, [clean_fn])
                     if fuzzy_p and fuzzy_p.is_file():
                         _FILE_LOCATION_CACHE[clean_fn] = fuzzy_p
+                        _FILE_LOCATION_CACHE[fn_key] = fuzzy_p
                         return fuzzy_p
+                    with os.scandir(str(f_path)) as it:
+                        for entry in it:
+                            if entry.is_file() and hebrew_compare_key(entry.name) == fn_key:
+                                found = Path(entry.path)
+                                _FILE_LOCATION_CACHE[clean_fn] = found
+                                _FILE_LOCATION_CACHE[fn_key] = found
+                                return found
             except Exception:
                 pass
     except Exception:
         pass
 
-    # 9. Check shallow folders (top-level directories)
+    # 9. Check shallow folders (top-level and 2nd level directories)
     root = storage.get_explorer_root()
     if root.exists():
         try:
@@ -950,24 +1097,37 @@ def locate_lesson_file(
                         cand = Path(entry.path) / clean_fn
                         if cand.is_file():
                             _FILE_LOCATION_CACHE[clean_fn] = cand
+                            _FILE_LOCATION_CACHE[fn_key] = cand
                             return cand
+                        # Check files inside top-level directory
+                        try:
+                            with os.scandir(entry.path) as sub_it:
+                                for sub_entry in sub_it:
+                                    if sub_entry.is_file() and hebrew_compare_key(sub_entry.name) == fn_key:
+                                        found = Path(sub_entry.path)
+                                        _FILE_LOCATION_CACHE[clean_fn] = found
+                                        _FILE_LOCATION_CACHE[fn_key] = found
+                                        return found
+                                    elif sub_entry.is_dir() and not sub_entry.name.startswith("."):
+                                        cand2 = Path(sub_entry.path) / clean_fn
+                                        if cand2.is_file():
+                                            _FILE_LOCATION_CACHE[clean_fn] = cand2
+                                            _FILE_LOCATION_CACHE[fn_key] = cand2
+                                            return cand2
+                                        try:
+                                            with os.scandir(sub_entry.path) as sub2_it:
+                                                for sub2_entry in sub2_it:
+                                                    if sub2_entry.is_file() and hebrew_compare_key(sub2_entry.name) == fn_key:
+                                                        found = Path(sub2_entry.path)
+                                                        _FILE_LOCATION_CACHE[clean_fn] = found
+                                                        _FILE_LOCATION_CACHE[fn_key] = found
+                                                        return found
+                                        except Exception:
+                                            pass
+                        except Exception:
+                            pass
         except Exception:
             pass
-
-        # 10. Fallback: tree walk with normalized Hebrew comparison
-        try:
-            for dirpath, dirs, filenames in os.walk(root):
-                dirs[:] = [d for d in dirs if not d.startswith(".") and d not in ("$RECYCLE.BIN", "System Volume Information", "lost+found", "הגברת החירות")]
-                for fn in filenames:
-                    norm_curr = normalize_hebrew_string(fn).lower()
-                    if norm_curr == norm_fn:
-                        found_p = Path(dirpath) / fn
-                        _FILE_LOCATION_CACHE[clean_fn] = found_p
-                        return found_p
-                    if fn.lower().endswith((".mp3", ".wav", ".m4a", ".ogg")):
-                        _FILE_LOCATION_CACHE[fn] = Path(dirpath) / fn
-        except Exception as e:
-            print(f"[Locate] Error during root search: {e}")
 
     return None
 

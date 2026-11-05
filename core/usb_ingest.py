@@ -236,7 +236,19 @@ def get_drive_label(drive_path: Path) -> str:
     if normalized_mount:
         return normalized_mount
 
-    return "מקלט שמע"
+    # 5. Linux USB drive partition number/letter mapping (e.g. sdb1 -> מקלט 1, sdc1 -> מקלט 2, sdd1 -> מקלט 3, sde1 -> מקלט 4)
+    try:
+        mount_str = str(drive_path).lower()
+        m_part = re.search(r'sd([b-z])([1-9])?', mount_str)
+        if m_part:
+            letter = m_part.group(1)
+            num = ord(letter) - ord('b') + 1
+            if 1 <= num <= 9:
+                return f"מקלט {num}"
+    except Exception:
+        pass
+
+    return "מקלט 1"
 
 def copy_and_verify_from_usb(
     source_file: Path,
