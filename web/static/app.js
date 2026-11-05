@@ -843,6 +843,21 @@ function renderExplorerView() {
     const audioFiles = currentFolderData.audio_files || [];
     let audioFilesHtml = "";
     if (audioFiles.length > 0) {
+        const isWeeklyFolder = (
+            (currentFolderData.current_name && currentFolderData.current_name.trim() === "שיעורי השבוע") ||
+            (currentFolderData.current_rel_path && (
+                currentFolderData.current_rel_path.trim() === "שיעורי השבוע" ||
+                currentFolderData.current_rel_path.startsWith("שיעורי השבוע/") ||
+                currentFolderData.current_rel_path.startsWith("שיעורי השבוע\\")
+            )) ||
+            (currentFolderData.current_full_path && (
+                currentFolderData.current_full_path.endsWith("/שיעורי השבוע") ||
+                currentFolderData.current_full_path.endsWith("\\שיעורי השבוע") ||
+                currentFolderData.current_full_path.includes("/שיעורי השבוע/") ||
+                currentFolderData.current_full_path.includes("\\שיעורי השבוע\\")
+            ))
+        );
+
         audioFilesHtml = `
             <div class="existing-lessons-panel">
                 <div class="existing-lessons-header">
@@ -856,6 +871,14 @@ function renderExplorerView() {
                     ${audioFiles.map((name, i) => {
                         const cleanName = name.replace(/\.(mp3|wav|m4a|ogg)$/i, "");
                         const ext = (name.split('.').pop() || 'MP3').toUpperCase();
+                        const editBtnHtml = isWeeklyFolder ? "" : `
+                            <button type="button" 
+                                    class="btn-edit-existing-lesson" 
+                                    onclick="openEditFromExplorer('${encodeURIComponent(name).replace(/'/g, "%27")}', this)"
+                                    title="ערוך שיעור זה">
+                                ✏️ ערוך
+                            </button>
+                        `;
                         return `
                             <div class="existing-lesson-item">
                                 <div class="existing-lesson-main">
@@ -866,12 +889,7 @@ function renderExplorerView() {
                                     </div>
                                 </div>
                                 <div class="existing-lesson-actions">
-                                    <button type="button" 
-                                            class="btn-edit-existing-lesson" 
-                                            onclick="openEditFromExplorer('${encodeURIComponent(name).replace(/'/g, "%27")}', this)"
-                                            title="ערוך שיעור זה">
-                                        ✏️ ערוך
-                                    </button>
+                                    ${editBtnHtml}
                                     <button type="button" 
                                             class="btn-preview-audio" 
                                             id="preview-btn-${i}"
