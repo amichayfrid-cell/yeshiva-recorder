@@ -587,6 +587,7 @@ let highlightedSearchResultIndex = 0;
 function handleFolderSearchInput() {
     const input = document.getElementById("modal-folder-search-input");
     const clearBtn = document.getElementById("modal-search-clear-btn");
+    const listContainer = document.getElementById("modal-folders-list");
     if (!input) return;
     const q = input.value.trim();
 
@@ -601,29 +602,40 @@ function handleFolderSearchInput() {
     const currentSubfolders = (currentFolderData && currentFolderData.subfolders) ? currentFolderData.subfolders : [];
     const localFiltered = currentSubfolders.filter(s => s.name.toLowerCase().includes(q.toLowerCase()));
 
-    renderFolderSearchResults(localFiltered, q, true);
-
-    // 2. Global search across all folders on the server (debounced)
-    clearTimeout(folderSearchTimer);
-    if (q.length >= 2) {
-        folderSearchTimer = setTimeout(async () => {
-            try {
-                const res = await fetch(`/api/folders/search?q=${encodeURIComponent(q)}`);
-                if (res.status === 401) {
-                    window.location.href = "/login";
-                    return;
-                }
-                const data = await res.json();
-                if (document.getElementById("modal-folder-search-input") && document.getElementById("modal-folder-search-input").value.trim() === q) {
-                    currentFolderSearchResults = (data.results || []).filter(item => !item.name.includes("הגברת החירות"));
-                    highlightedSearchResultIndex = 0;
-                    renderFolderSearchResults(currentFolderSearchResults, q, false);
-                }
-            } catch (err) {
-                console.warn("Folder search failed:", err);
-            }
-        }, 220);
+    if (localFiltered.length > 0) {
+        renderFolderSearchResults(localFiltered, q, true, true);
+    } else {
+        if (listContainer) {
+            listContainer.innerHTML = `
+                <div style="text-align: center; padding: 2.5rem 1rem; color: var(--text-muted);">
+                    <div style="font-size: 2rem; margin-bottom: 0.5rem;">🔍</div>
+                    <div style="font-weight: 600; font-size: 1rem; color: var(--text-main); margin-bottom: 0.25rem;">
+                        מחפש "${escapeHtml(q)}" בכל תת-התיקיות בשרת...
+                    </div>
+                </div>
+            `;
+        }
     }
+
+    // 2. Global search across ALL subfolders on the server (debounced 120ms)
+    clearTimeout(folderSearchTimer);
+    folderSearchTimer = setTimeout(async () => {
+        try {
+            const res = await fetch(`/api/folders/search?q=${encodeURIComponent(q)}`);
+            if (res.status === 401) {
+                window.location.href = "/login";
+                return;
+            }
+            const data = await res.json();
+            if (document.getElementById("modal-folder-search-input") && document.getElementById("modal-folder-search-input").value.trim() === q) {
+                currentFolderSearchResults = (data.results || []).filter(item => !item.name.includes("הגברת החירות"));
+                highlightedSearchResultIndex = 0;
+                renderFolderSearchResults(currentFolderSearchResults, q, false, false);
+            }
+        } catch (err) {
+            console.warn("Folder search failed:", err);
+        }
+    }, 120);
 }
 
 function clearFolderSearch(shouldRender = true) {
@@ -639,7 +651,7 @@ function clearFolderSearch(shouldRender = true) {
     }
 }
 
-function renderFolderSearchResults(results, query, isLocalOnly = false) {
+function renderFolderSearchResults(results, query, isLocalOnly = false, isSearchingGlobal = false) {
     const listContainer = document.getElementById("modal-folders-list");
     if (!listContainer) return;
 
@@ -648,19 +660,19 @@ function renderFolderSearchResults(results, query, isLocalOnly = false) {
             <div style="text-align: center; padding: 2.5rem 1rem; color: var(--text-muted);">
                 <div style="font-size: 2rem; margin-bottom: 0.5rem;">🔍</div>
                 <div style="font-weight: 600; font-size: 1rem; color: var(--text-main); margin-bottom: 0.25rem;">
-                    לא נמצאו תיקיות עבור "${escapeHtml(query)}"
+                    לא נמצאו תת-תיקיות עבור "${escapeHtml(query)}"
                 </div>
                 <div style="font-size: 0.85rem;">
-                    נסה לחפש במילים קצרות יותר, או צור תיקייה חדשה למטה
+                    נסה לחפש במילים קצרות יותר (למשל שם הרב או שנתון), או צור תיקייה חדשה למטה
                 </div>
             </div>
         `;
         return;
     }
 
-    const countLabel = isLocalOnly 
-        ? `${results.length} תיקיות בתיקייה זו` 
-        : `${results.length} תיקיות ברחבי השרת`;
+    const countLabel = isSearchingGlobal 
+        ? `${results.length} תיקיות בתיקייה זו (מחפש גם בכל תת-התיקיות ברחבי השרת...)`
+        : (isLocalOnly ? `${results.length} תיקיות בתיקייה זו` : `${results.length} תת-תיקיות נמצאו בכל רחבי השרת`);
 
     let html = `
         <div class="search-results-header">
@@ -1371,16 +1383,22 @@ async function deleteLesson(index, encodedFilename, encodedSourcePath) {
 
 let editOpenedFromExplorer = false;
 
+function normalizeHebrewQuotes(s) {
+    if (!s) return "";
+    return s.replace(/['׳’‘`]/g, "'").replace(/["״”“]|''/g, '"').trim().toLowerCase();
+}
+
 async function openEditFromExplorer(encodedFilename, btnElement = null) {
     const filename = decodeURIComponent(encodedFilename);
     if (!currentFolderData) return;
 
     stopModalAudioPreview();
 
-    // Check if there is an open note for this file
+    // Check if there is an open note for this file with Hebrew quote tolerance
+    const normFile = normalizeHebrewQuotes(filename);
     const matchingNote = (allNotes || []).find(n => {
         const nBase = (n.filename || "").replace(/\\/g, "/").split("/").pop();
-        return nBase === filename && n.status === "open";
+        return normalizeHebrewQuotes(nBase) === normFile && n.status === "open";
     });
 
     const noteId = matchingNote ? matchingNote.id : null;
@@ -1389,11 +1407,12 @@ async function openEditFromExplorer(encodedFilename, btnElement = null) {
     // Temporarily hide folder modal so edit modal is cleanly visible
     document.getElementById("folder-modal").classList.remove("open");
 
-    await openEditLessonModal(encodedFilename, noteId, btnElement);
+    const folderPath = currentFolderData.current_full_path || "";
+    await openEditLessonModal(encodedFilename, noteId, btnElement, folderPath);
 }
 
 // Open Edit Lesson Modal (from Note or Folder Explorer)
-async function openEditLessonModal(encodedFilename, noteId, btnElement = null) {
+async function openEditLessonModal(encodedFilename, noteId, btnElement = null, forcedFolderPath = null) {
     const filename = decodeURIComponent(encodedFilename);
     const note = (allNotes || []).find(n => n.id === noteId);
 
@@ -1420,9 +1439,16 @@ async function openEditLessonModal(encodedFilename, noteId, btnElement = null) {
     }
     document.getElementById("edit-lesson-note-id").value = noteId || "";
 
-    let origPath = (note && note.original_path) ? note.original_path : "";
-    if (!origPath && currentFolderData && currentFolderData.current_full_path) {
-        origPath = currentFolderData.current_full_path + "/" + filename;
+    let origPath = "";
+    let folderPath = forcedFolderPath || "";
+
+    if (forcedFolderPath) {
+        origPath = forcedFolderPath + "/" + filename;
+    } else if (note && note.original_path) {
+        origPath = note.original_path;
+    } else if (currentFolderData && currentFolderData.current_full_path) {
+        folderPath = currentFolderData.current_full_path;
+        origPath = folderPath + "/" + filename;
     }
 
     let prevBtnHtml = "";
@@ -1436,7 +1462,8 @@ async function openEditLessonModal(encodedFilename, noteId, btnElement = null) {
         const queryParams = new URLSearchParams({
             filename: filename,
             note_id: noteId || '',
-            original_path: origPath
+            original_path: origPath,
+            folder_path: folderPath
         });
         const res = await fetch(`/api/lessons/details_for_edit?${queryParams.toString()}`);
         const data = await res.json();

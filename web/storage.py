@@ -262,12 +262,39 @@ def get_notes_for_file(filename: str) -> List[Dict[str, Any]]:
     base = os.path.basename(filename.replace('\\', '/'))
     return [n for n in get_notes_data() if os.path.basename(n.get("filename", "").replace('\\', '/')) == base and n.get("status") == "open"]
 
+FOLDERS_CACHE_FILE = config.DATA_DIR / "folders_tree_cache.json"
+
+def get_explorer_root() -> Path:
+    """
+    Returns the root directory for exploring and searching folders.
+    Always uses NETWORK_MOUNT_POINT (/mnt/yeshiva_share) if accessible,
+    falling back to get_final_target_dir() or LOCAL_STAGING_DIR.
+    """
+    if config.NETWORK_MOUNT_POINT.exists() and config.NETWORK_MOUNT_POINT.is_dir():
+        try:
+            with os.scandir(str(config.NETWORK_MOUNT_POINT)) as it:
+                for entry in it:
+                    if not entry.name.startswith("."):
+                        return config.NETWORK_MOUNT_POINT
+        except Exception:
+            pass
+            
+    try:
+        target = config.get_final_target_dir()
+        if target.exists() and target.is_dir():
+            return target
+    except Exception:
+        pass
+
+    return config.LOCAL_STAGING_DIR
+
 def list_direct_subfolders(target_path: Optional[str] = None) -> Dict[str, Any]:
     """
     Blazing fast subfolder listing using os.scandir and in-memory cache.
     Ignores non-directory files entirely to eliminate network overhead.
     """
-    root_str = str(config.NETWORK_MOUNT_POINT if config.is_network_share_mounted() else config.LOCAL_STAGING_DIR)
+    root_path = get_explorer_root()
+    root_str = str(root_path)
 
     if not target_path or target_path == "":
         current_dir_str = root_str
@@ -355,14 +382,16 @@ ALL_FOLDERS_CACHE_TTL = 300.0  # 5 minutes
 def _crawl_all_folders_worker():
     global _ALL_FOLDERS_CACHE, _ALL_FOLDERS_CACHE_TIME, _IS_CRAWLING_FOLDERS
     try:
-        root_str = str(config.NETWORK_MOUNT_POINT if config.is_network_share_mounted() else config.LOCAL_STAGING_DIR)
+        root_path = get_explorer_root()
+        root_str = str(root_path)
         if not os.path.isdir(root_str):
             return
 
         ignored = {"שיעורים למיון", "incoming", "needs_review", "lost+found", "$RECYCLE.BIN", "System Volume Information"}
         folders = []
 
-        for root, dirs, _ in os.walk(root_str):
+        # Recursively traverse all subfolders across all directory levels
+        for root, dirs, _ in os.walk(root_str, followlinks=False):
             dirs[:] = [
                 d for d in dirs 
                 if not d.startswith(".") 
@@ -372,43 +401,65 @@ def _crawl_all_folders_worker():
             
             for d in dirs:
                 full_d = os.path.join(root, d)
-                rel_d = os.path.relpath(full_d, root_str).replace("\\", "/")
-                parts = [p for p in rel_d.split("/") if p]
-                breadcrumb = " ❯ ".join(parts)
-                folders.append({
-                    "name": d,
-                    "rel_path": rel_d,
-                    "full_path": full_d,
-                    "breadcrumb": breadcrumb
-                })
+                try:
+                    rel_d = os.path.relpath(full_d, root_str).replace("\\", "/")
+                    parts = [p for p in rel_d.split("/") if p]
+                    breadcrumb = " ❯ ".join(parts)
+                    folders.append({
+                        "name": d,
+                        "rel_path": rel_d,
+                        "full_path": full_d,
+                        "breadcrumb": breadcrumb
+                    })
+                except Exception:
+                    pass
 
-        _ALL_FOLDERS_CACHE = folders
-        _ALL_FOLDERS_CACHE_TIME = time.time()
+        # Only update cache if folders were discovered
+        if folders:
+            _ALL_FOLDERS_CACHE = folders
+            _ALL_FOLDERS_CACHE_TIME = time.time()
+            try:
+                FOLDERS_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+                with open(FOLDERS_CACHE_FILE, "w", encoding="utf-8") as f:
+                    json.dump(folders, f, ensure_ascii=False)
+            except Exception as save_err:
+                print(f"[Storage] Could not persist folders tree cache: {save_err}")
     except Exception as e:
-        print(f"[Storage] Error in background folder crawl: {e}")
+        print(f"[Storage] Error during folder crawl: {e}")
     finally:
         _IS_CRAWLING_FOLDERS = False
 
 def get_all_folders_flat() -> List[Dict[str, Any]]:
     """
-    Crawls the root folder and builds a flat list of all navigable directories.
-    Uses Stale-While-Revalidate caching to never block user search requests.
+    Crawls the root folder and builds a flat list of all navigable directories and sub-directories.
+    Uses memory cache + persistent disk cache to guarantee instant search across thousands of subfolders.
     """
     global _ALL_FOLDERS_CACHE, _ALL_FOLDERS_CACHE_TIME, _IS_CRAWLING_FOLDERS
     now = time.time()
 
-    # 1. Fresh cache hit
-    if _ALL_FOLDERS_CACHE is not None and (now - _ALL_FOLDERS_CACHE_TIME) < ALL_FOLDERS_CACHE_TTL:
-        return _ALL_FOLDERS_CACHE
-
-    # 2. Stale cache hit: return immediately and trigger background refresh
-    if _ALL_FOLDERS_CACHE is not None:
-        if not _IS_CRAWLING_FOLDERS:
+    # 1. In-memory cache hit if populated
+    if _ALL_FOLDERS_CACHE and len(_ALL_FOLDERS_CACHE) > 0:
+        if (now - _ALL_FOLDERS_CACHE_TIME) > ALL_FOLDERS_CACHE_TTL and not _IS_CRAWLING_FOLDERS:
             _IS_CRAWLING_FOLDERS = True
             threading.Thread(target=_crawl_all_folders_worker, daemon=True).start()
         return _ALL_FOLDERS_CACHE
 
-    # 3. First time cold start: synchronously crawl
+    # 2. Persistent disk cache hit
+    if FOLDERS_CACHE_FILE.exists():
+        try:
+            with open(FOLDERS_CACHE_FILE, "r", encoding="utf-8") as f:
+                disk_folders = json.load(f)
+                if disk_folders and len(disk_folders) > 0:
+                    _ALL_FOLDERS_CACHE = disk_folders
+                    _ALL_FOLDERS_CACHE_TIME = FOLDERS_CACHE_FILE.stat().st_mtime
+                    if (now - _ALL_FOLDERS_CACHE_TIME) > ALL_FOLDERS_CACHE_TTL and not _IS_CRAWLING_FOLDERS:
+                        _IS_CRAWLING_FOLDERS = True
+                        threading.Thread(target=_crawl_all_folders_worker, daemon=True).start()
+                    return _ALL_FOLDERS_CACHE
+        except Exception:
+            pass
+
+    # 3. Synchronous crawl if cache is empty
     _IS_CRAWLING_FOLDERS = True
     _crawl_all_folders_worker()
     return _ALL_FOLDERS_CACHE or []
@@ -416,32 +467,48 @@ def get_all_folders_flat() -> List[Dict[str, Any]]:
 # Pre-warm folder cache in background on module startup
 threading.Thread(target=_crawl_all_folders_worker, daemon=True).start()
 
-def search_folders(query: str, limit: int = 50) -> List[Dict[str, Any]]:
+def search_folders(query: str, limit: int = 100) -> List[Dict[str, Any]]:
     """
-    Searches for folders matching the given query (case-insensitive Hebrew/English).
-    Prioritizes matches in folder name over path matches.
+    Searches for folders and subfolders matching the given query across all directory depths.
+    Supports multi-word queries (e.g. 'הרב אורי', 'עיון בבא מציעא', 'תשפד').
+    Prioritizes exact subfolder name matches, then subfolder prefix, then path breadcrumb matches.
     """
     clean_q = query.strip().lower()
     if not clean_q:
         return []
 
+    words = [w for w in clean_q.split() if w]
     all_folders = get_all_folders_flat()
-    name_matches = []
+
+    exact_name = []
+    starts_with_name = []
+    contains_name = []
     path_matches = []
 
     for f in all_folders:
         fn_lower = f["name"].lower()
         rel_lower = f["rel_path"].lower()
-        if clean_q in fn_lower:
-            name_matches.append(f)
-        elif clean_q in rel_lower:
+
+        # Check if all query words appear in the name or the full relative path
+        if not all(w in rel_lower for w in words):
+            continue
+
+        if fn_lower == clean_q:
+            exact_name.append(f)
+        elif fn_lower.startswith(clean_q):
+            starts_with_name.append(f)
+        elif all(w in fn_lower for w in words):
+            contains_name.append(f)
+        else:
             path_matches.append(f)
 
-    # Sort name matches: exact match first, then shorter name, then alphabetical
-    name_matches.sort(key=lambda x: (x["name"].lower() != clean_q, len(x["name"]), x["name"]))
+    # Sort results
+    exact_name.sort(key=lambda x: len(x["rel_path"]))
+    starts_with_name.sort(key=lambda x: (len(x["name"]), x["name"]))
+    contains_name.sort(key=lambda x: (len(x["name"]), x["name"]))
     path_matches.sort(key=lambda x: (len(x["rel_path"]), x["rel_path"]))
 
-    results = (name_matches + path_matches)[:limit]
+    results = (exact_name + starts_with_name + contains_name + path_matches)[:limit]
     return results
 
 def create_new_folder(base_folder: str, new_folder_name: str) -> str:
