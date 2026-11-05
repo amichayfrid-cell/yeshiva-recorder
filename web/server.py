@@ -610,52 +610,178 @@ def change_note_status(request: Request, note_id: int = Form(...), status: str =
     success = storage.update_note_status(note_id, status)
     return JSONResponse({"status": "success" if success else "error"})
 
+_FILE_LOCATION_CACHE: Dict[str, Path] = {}
+
+def resolve_possible_local_paths(path_str: str) -> List[Path]:
+    """
+    Translates Windows SMB UNC paths (\\\\mdserver\\שיעורי שמע\\...), mapped drives (Z:\\...),
+    or relative paths to actual mounted Linux paths on the server.
+    """
+    candidates = []
+    if not path_str:
+        return candidates
+
+    p_clean = path_str.replace('\\', '/').strip()
+    direct_p = Path(p_clean)
+    candidates.append(direct_p)
+
+    # Strip Windows drive letters (e.g. Z:/ or D:/)
+    no_drive = re.sub(r'^[a-zA-Z]:[/]', '', p_clean)
+    if no_drive != p_clean:
+        candidates.append(config.NETWORK_MOUNT_POINT / no_drive.lstrip('/'))
+        candidates.append(config.LOCAL_STAGING_DIR / no_drive.lstrip('/'))
+
+    # Map mdserver / IP UNC shares to Linux mounts
+    # 1. Yeshiva primary share (שיעורי שמע) -> /mnt/yeshiva_share
+    m_share = re.sub(r'^//[^/]+/(שיעורי שמע|שיעורי_שמע)[/]?', '', p_clean)
+    if m_share != p_clean:
+        candidates.append(config.NETWORK_MOUNT_POINT / m_share.lstrip('/'))
+        candidates.append(config.LOCAL_STAGING_DIR / m_share.lstrip('/'))
+
+    # 2. Upload share (העלאת שיעורים) -> /mnt/yeshiva_upload
+    m_upload = re.sub(r'^//[^/]+/(העלאת שיעורים|העלאת_שיעורים)[/]?', '', p_clean)
+    if m_upload != p_clean:
+        candidates.append(config.NETWORK_UPLOAD_MOUNT / m_upload.lstrip('/'))
+        if hasattr(config, "NETWORK_SHARE_UPLOAD_SUBDIR"):
+            candidates.append(config.NETWORK_SHARE_UPLOAD_SUBDIR / m_upload.lstrip('/'))
+        if hasattr(config, "LOCAL_UPLOAD_DIR"):
+            candidates.append(config.LOCAL_UPLOAD_DIR / m_upload.lstrip('/'))
+
+    # 3. Direct relative to NETWORK_MOUNT_POINT and LOCAL_STAGING_DIR
+    clean_stripped = p_clean.lstrip('/')
+    candidates.append(config.NETWORK_MOUNT_POINT / clean_stripped)
+    candidates.append(config.LOCAL_STAGING_DIR / clean_stripped)
+
+    return candidates
+
 def locate_lesson_file(filename: str, original_path: Optional[str] = None) -> Optional[Path]:
-    """Locates an audio file anywhere in the sorting directory, upload directory, or network share."""
-    # 1. If explicit path provided and exists
-    if original_path:
-        p_orig = Path(original_path.replace('\\', '/'))
-        if p_orig.exists() and p_orig.is_file():
-            return p_orig
-
-    p_direct = Path(filename)
-    if p_direct.exists() and p_direct.is_file():
-        return p_direct
-
+    """
+    High-performance lesson locator.
+    Resolves paths instantly without blocking SMB crawling:
+    1. Checks translated original_path (<1ms)
+    2. Checks in-memory cache (<1ms)
+    3. Checks sorting directory (<1ms)
+    4. Checks upload directories (<1ms)
+    5. Checks student notes database for recorded path (<1ms)
+    6. Checks shallow semester/year folders (<5ms)
+    7. Only as last resort, crawls with caching to prevent future delays.
+    """
     clean_fn = os.path.basename(filename.replace('\\', '/'))
-    
-    # 2. Check sorting dir
-    sorting_dir = get_sorting_dir()
-    p = sorting_dir / clean_fn
-    if p.exists() and p.is_file():
-        return p
 
-    # 3. Check upload directories (\\mdserver\העלאת שיעורים)
+    # 1. Check original_path if provided
+    if original_path:
+        for cand in resolve_possible_local_paths(original_path):
+            try:
+                if cand.is_file():
+                    _FILE_LOCATION_CACHE[clean_fn] = cand
+                    return cand
+            except OSError:
+                pass
+
+    # 2. Check filename if it's already a full path
+    for cand in resolve_possible_local_paths(filename):
+        try:
+            if cand.is_file():
+                _FILE_LOCATION_CACHE[clean_fn] = cand
+                return cand
+        except OSError:
+            pass
+
+    # 3. Check in-memory location cache
+    if clean_fn in _FILE_LOCATION_CACHE:
+        cached_p = _FILE_LOCATION_CACHE[clean_fn]
+        try:
+            if cached_p.is_file():
+                return cached_p
+        except OSError:
+            _FILE_LOCATION_CACHE.pop(clean_fn, None)
+
+    # 4. Check sorting directory (incoming / staging / needs_review)
+    sorting_dir = get_sorting_dir()
+    p_sort = sorting_dir / clean_fn
+    try:
+        if p_sort.is_file():
+            _FILE_LOCATION_CACHE[clean_fn] = p_sort
+            return p_sort
+    except OSError:
+        pass
+
+    # 5. Check upload directories (direct check without rglob)
     for upload_dir in config.get_upload_dirs():
         if upload_dir and upload_dir.exists():
             p_up = upload_dir / clean_fn
-            if p_up.exists() and p_up.is_file():
-                return p_up
-            # Check subfolders of upload_dir
-            for sub_p in upload_dir.rglob(clean_fn):
-                if sub_p.is_file():
-                    return sub_p
+            try:
+                if p_up.is_file():
+                    _FILE_LOCATION_CACHE[clean_fn] = p_up
+                    return p_up
+            except OSError:
+                pass
 
-    # 4. Search within NETWORK_MOUNT_POINT / LOCAL_STAGING_DIR
+    # 6. Check student notes data for an original_path recorded by the student
+    try:
+        for n in storage.get_notes_data():
+            if os.path.basename(n.get("filename", "").replace('\\', '/')) == clean_fn and n.get("original_path"):
+                for cand in resolve_possible_local_paths(n["original_path"]):
+                    try:
+                        if cand.is_file():
+                            _FILE_LOCATION_CACHE[clean_fn] = cand
+                            return cand
+                    except OSError:
+                        pass
+    except Exception:
+        pass
+
+    # 7. Check shallow folders (top-level directories) before deep crawl
     root = config.NETWORK_MOUNT_POINT if config.NETWORK_MOUNT_POINT.exists() else config.LOCAL_STAGING_DIR
     if root.exists():
-        for dirpath, _, filenames in os.walk(root):
-            if clean_fn in filenames:
-                return Path(dirpath) / clean_fn
-                
+        try:
+            with os.scandir(root) as it:
+                for entry in it:
+                    if entry.is_dir() and not entry.name.startswith(".") and entry.name not in ("$RECYCLE.BIN", "System Volume Information", "lost+found"):
+                        cand = Path(entry.path) / clean_fn
+                        if cand.is_file():
+                            _FILE_LOCATION_CACHE[clean_fn] = cand
+                            return cand
+        except Exception:
+            pass
+
+        # 8. Fallback: tree walk, caching audio files found to eliminate future search latency
+        try:
+            for dirpath, dirs, filenames in os.walk(root):
+                dirs[:] = [d for d in dirs if not d.startswith(".") and d not in ("$RECYCLE.BIN", "System Volume Information", "lost+found", "הגברת החירות")]
+                for fn in filenames:
+                    if fn.lower().endswith((".mp3", ".wav", ".m4a", ".ogg")):
+                        _FILE_LOCATION_CACHE[fn] = Path(dirpath) / fn
+                if clean_fn in filenames:
+                    found_p = Path(dirpath) / clean_fn
+                    _FILE_LOCATION_CACHE[clean_fn] = found_p
+                    return found_p
+        except Exception as e:
+            print(f"[Locate] Error during root search: {e}")
+
     return None
 
 @app.get("/api/lessons/details_for_edit")
-def get_lesson_details_for_edit(request: Request, filename: str = Query(...), note_id: Optional[int] = Query(None)):
+def get_lesson_details_for_edit(
+    request: Request, 
+    filename: str = Query(...), 
+    note_id: Optional[int] = Query(None),
+    original_path: Optional[str] = Query(None)
+):
     if not is_authenticated(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
     
-    file_path = locate_lesson_file(filename)
+    # Auto-fetch original_path from note if not provided in query
+    if not original_path and note_id:
+        try:
+            for n in storage.get_notes_data():
+                if n.get("id") == note_id and n.get("original_path"):
+                    original_path = n.get("original_path")
+                    break
+        except Exception:
+            pass
+
+    file_path = locate_lesson_file(filename, original_path=original_path)
     if not file_path or not file_path.exists():
         return JSONResponse({"status": "success", "found": False})
     

@@ -736,13 +736,21 @@ function renderExplorerView() {
                                         <span class="existing-lesson-ext">${ext}</span>
                                     </div>
                                 </div>
-                                <button type="button" 
-                                        class="btn-preview-audio" 
-                                        id="preview-btn-${i}"
-                                        onclick="toggleModalAudioPreview('${encodeURIComponent(name).replace(/'/g, "%27")}', 'preview-btn-${i}')"
-                                        title="השמע שיעור">
-                                    ▶ השמע
-                                </button>
+                                <div class="existing-lesson-actions">
+                                    <button type="button" 
+                                            class="btn-edit-existing-lesson" 
+                                            onclick="openEditFromExplorer('${encodeURIComponent(name).replace(/'/g, "%27")}', this)"
+                                            title="ערוך שיעור זה">
+                                        ✏️ ערוך
+                                    </button>
+                                    <button type="button" 
+                                            class="btn-preview-audio" 
+                                            id="preview-btn-${i}"
+                                            onclick="toggleModalAudioPreview('${encodeURIComponent(name).replace(/'/g, "%27")}', 'preview-btn-${i}')"
+                                            title="השמע שיעור">
+                                        ▶ השמע
+                                    </button>
+                                </div>
                             </div>
                         `;
                     }).join('')}
@@ -1053,7 +1061,7 @@ function renderAllNotes() {
                 </div>
                 <div class="note-actions">
                     ${note.status === 'open' ? `
-                        <button class="btn btn-primary btn-sm" onclick="openEditLessonModal('${encodeURIComponent(note.filename).replace(/'/g, '%27')}', ${note.id})">✏️ ערוך שיעור</button>
+                        <button class="btn btn-primary btn-sm" onclick="openEditLessonModal('${encodeURIComponent(note.filename).replace(/'/g, '%27')}', ${note.id}, this)">✏️ ערוך שיעור</button>
                         <button class="btn btn-outline btn-sm" onclick="resolveNote(${note.id})">✓ סמן כטופל</button>
                     ` : `
                         <button class="btn btn-sm" disabled style="opacity: 0.5; cursor: not-allowed; background: #e2e8f0; color: #94a3b8; border: 1px solid #cbd5e1;" title="ההערה כבר סומנה כטופלה">✏️ ערוך שיעור (טופל)</button>
@@ -1202,29 +1210,84 @@ async function deleteLesson(index, encodedFilename, encodedSourcePath) {
     }
 }
 
-// Open Edit Lesson Modal from Note
-async function openEditLessonModal(encodedFilename, noteId) {
+let editOpenedFromExplorer = false;
+
+async function openEditFromExplorer(encodedFilename, btnElement = null) {
     const filename = decodeURIComponent(encodedFilename);
-    const note = allNotes.find(n => n.id === noteId);
+    if (!currentFolderData) return;
+
+    stopModalAudioPreview();
+
+    // Check if there is an open note for this file
+    const matchingNote = (allNotes || []).find(n => {
+        const nBase = (n.filename || "").replace(/\\/g, "/").split("/").pop();
+        return nBase === filename && n.status === "open";
+    });
+
+    const noteId = matchingNote ? matchingNote.id : null;
+    editOpenedFromExplorer = true;
+
+    // Temporarily hide folder modal so edit modal is cleanly visible
+    document.getElementById("folder-modal").classList.remove("open");
+
+    await openEditLessonModal(encodedFilename, noteId, btnElement);
+}
+
+// Open Edit Lesson Modal (from Note or Folder Explorer)
+async function openEditLessonModal(encodedFilename, noteId, btnElement = null) {
+    const filename = decodeURIComponent(encodedFilename);
+    const note = (allNotes || []).find(n => n.id === noteId);
 
     if (note && note.status !== "open") {
         alert("הערה זו כבר סומנה כטופלה ולא ניתן לערוך את השיעור.");
         return;
     }
 
+    const noteBanner = document.getElementById("edit-modal-note-banner");
+    const modalTitle = document.querySelector("#edit-lesson-modal .modal-header h3");
+    const saveBtn = document.getElementById("edit-lesson-save-btn");
+
     if (note) {
+        if (noteBanner) noteBanner.style.display = "flex";
+        if (modalTitle) modalTitle.innerText = "✏️ עריכת שיעור ופתרון פנייה";
+        if (saveBtn) saveBtn.innerHTML = "💾 שמור שינויים וסמן כטופל";
         document.getElementById("edit-modal-student-name").innerText = note.student_name || "תלמיד אנונימי";
         document.getElementById("edit-modal-note-desc").innerText = note.description || "";
         document.getElementById("edit-modal-note-meta").innerText = `נשלח בתאריך: ${formatNoteDateDisplay(note)}`;
+    } else {
+        if (noteBanner) noteBanner.style.display = "none";
+        if (modalTitle) modalTitle.innerText = "✏️ עריכת שיעור";
+        if (saveBtn) saveBtn.innerHTML = "💾 שמור שינויים";
     }
     document.getElementById("edit-lesson-note-id").value = noteId || "";
 
+    let origPath = (note && note.original_path) ? note.original_path : "";
+    if (!origPath && currentFolderData && currentFolderData.current_full_path) {
+        origPath = currentFolderData.current_full_path + "/" + filename;
+    }
+
+    let prevBtnHtml = "";
+    if (btnElement) {
+        prevBtnHtml = btnElement.innerHTML;
+        btnElement.innerHTML = "⏳ טוען...";
+        btnElement.style.pointerEvents = "none";
+    }
+
     try {
-        const res = await fetch(`/api/lessons/details_for_edit?filename=${encodeURIComponent(filename)}&note_id=${noteId || ''}`);
+        const queryParams = new URLSearchParams({
+            filename: filename,
+            note_id: noteId || '',
+            original_path: origPath
+        });
+        const res = await fetch(`/api/lessons/details_for_edit?${queryParams.toString()}`);
         const data = await res.json();
 
         if (!data.found) {
             alert(`⚠️ הקובץ '${filename}' לא נמצא כרגע בשרת (ייתכן שכבר הועבר או נמחק).`);
+            if (editOpenedFromExplorer) {
+                editOpenedFromExplorer = false;
+                document.getElementById("folder-modal").classList.add("open");
+            }
             return;
         }
 
@@ -1243,6 +1306,15 @@ async function openEditLessonModal(encodedFilename, noteId) {
         document.getElementById("edit-lesson-modal").classList.add("open");
     } catch (e) {
         alert("שגיאה בטעינת פרטי הקובץ: " + e.message);
+        if (editOpenedFromExplorer) {
+            editOpenedFromExplorer = false;
+            document.getElementById("folder-modal").classList.add("open");
+        }
+    } finally {
+        if (btnElement) {
+            btnElement.innerHTML = prevBtnHtml;
+            btnElement.style.pointerEvents = "auto";
+        }
     }
 }
 
@@ -1254,6 +1326,11 @@ function closeEditLessonModal() {
     const playBtn = document.getElementById("play-btn-edit");
     if (playBtn) playBtn.innerText = "▶";
     document.getElementById("edit-lesson-modal").classList.remove("open");
+
+    if (editOpenedFromExplorer) {
+        editOpenedFromExplorer = false;
+        document.getElementById("folder-modal").classList.add("open");
+    }
 }
 
 async function saveEditedLesson() {
@@ -1292,9 +1369,15 @@ async function saveEditedLesson() {
         const data = await res.json();
 
         if (data.status === "success") {
+            const wasFromExplorer = editOpenedFromExplorer;
+            editOpenedFromExplorer = false;
             closeEditLessonModal();
             await loadNotes();
             await loadPendingLessons();
+            if (wasFromExplorer && currentFolderData && currentFolderData.current_full_path) {
+                document.getElementById("folder-modal").classList.add("open");
+                await fetchFolderContent(currentFolderData.current_full_path);
+            }
             alert(`✓ השיעור עודכן בהצלחה!\nשם חדש: ${data.filename}`);
         } else {
             alert(data.message || data.detail || "שגיאה בעדכון השיעור");
