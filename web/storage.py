@@ -39,6 +39,12 @@ def normalize_recorder_label(raw_label: Optional[str]) -> Optional[str]:
     if clean.upper() in generic:
         return None
 
+    # Filter out single English drive letters (e.g. 'O', 'D', 'E', 'F') or 'מקלט O' (Windows drive letter artifact)
+    if len(clean) == 1 and clean.isalpha() and clean.isascii():
+        return None
+    if re.fullmatch(r'מקלט\s+[a-zA-Z]', clean, re.IGNORECASE):
+        return None
+
     # Check Hebrew pattern: 'מקלט X'
     m_heb = re.search(r'מקלט[\s_-]*([0-9א-ת]+|[a-zA-Z]+)?', clean)
     if m_heb:
@@ -288,6 +294,37 @@ def get_notes_for_file(filename: str) -> List[Dict[str, Any]]:
 
 FOLDERS_CACHE_FILE = config.DATA_DIR / "folders_tree_cache.json"
 
+IGNORED_FOLDER_EXACT = {
+    "שיעורים למיון", 
+    "incoming", 
+    "needs_review", 
+    "lost+found", 
+    "$recycle.bin", 
+    "system volume information"
+}
+
+def is_ignored_folder_name(name: str) -> bool:
+    if not name:
+        return True
+    clean = str(name).strip()
+    if clean.startswith("."):
+        return True
+    if clean.lower() in IGNORED_FOLDER_EXACT:
+        return True
+    if "הגברת החירות" in clean:
+        return True
+    if "אחראי שמע" in clean:
+        return True
+    if "ארכיון" in clean:
+        return True
+    return False
+
+def is_ignored_folder_path(rel_path: str) -> bool:
+    if not rel_path:
+        return False
+    parts = [p.strip() for p in str(rel_path).replace("\\", "/").split("/") if p.strip()]
+    return any(is_ignored_folder_name(p) for p in parts)
+
 def get_explorer_root() -> Path:
     """
     Returns the root directory for exploring and searching folders.
@@ -347,7 +384,6 @@ def list_direct_subfolders(target_path: Optional[str] = None) -> Dict[str, Any]:
 
     subfolders = []
     audio_files = []
-    ignored = {"שיעורים למיון", "incoming", "needs_review", "lost+found", "$RECYCLE.BIN", "System Volume Information"}
 
     try:
         with os.scandir(current_dir_str) as it:
@@ -356,13 +392,14 @@ def list_direct_subfolders(target_path: Optional[str] = None) -> Dict[str, Any]:
                     if entry.name.startswith("."):
                         continue
                     if entry.is_dir(follow_symlinks=False):
-                        if entry.name not in ignored and "הגברת החירות" not in entry.name:
+                        if not is_ignored_folder_name(entry.name):
                             rel_path = os.path.relpath(entry.path, root_str)
-                            subfolders.append({
-                                "name": entry.name,
-                                "rel_path": "" if rel_path == "." else rel_path,
-                                "full_path": entry.path
-                            })
+                            if not is_ignored_folder_path(rel_path):
+                                subfolders.append({
+                                    "name": entry.name,
+                                    "rel_path": "" if rel_path == "." else rel_path,
+                                    "full_path": entry.path
+                                })
                     elif entry.is_file(follow_symlinks=False):
                         ext = os.path.splitext(entry.name)[1].lower()
                         if ext in [".mp3", ".wav", ".m4a", ".ogg"]:
@@ -411,22 +448,21 @@ def _crawl_all_folders_worker():
         if not os.path.isdir(root_str):
             return
 
-        ignored = {"שיעורים למיון", "incoming", "needs_review", "lost+found", "$RECYCLE.BIN", "System Volume Information"}
         folders = []
 
         # Recursively traverse all subfolders across all directory levels
         for root, dirs, _ in os.walk(root_str, followlinks=False):
             dirs[:] = [
                 d for d in dirs 
-                if not d.startswith(".") 
-                and d not in ignored 
-                and "הגברת החירות" not in d
+                if not is_ignored_folder_name(d)
             ]
             
             for d in dirs:
                 full_d = os.path.join(root, d)
                 try:
                     rel_d = os.path.relpath(full_d, root_str).replace("\\", "/")
+                    if is_ignored_folder_path(rel_d):
+                        continue
                     parts = [p for p in rel_d.split("/") if p]
                     breadcrumb = " ❯ ".join(parts)
                     folders.append({
@@ -474,6 +510,11 @@ def get_all_folders_flat() -> List[Dict[str, Any]]:
             with open(FOLDERS_CACHE_FILE, "r", encoding="utf-8") as f:
                 disk_folders = json.load(f)
                 if disk_folders and len(disk_folders) > 0:
+                    disk_folders = [
+                        f for f in disk_folders 
+                        if not is_ignored_folder_name(f.get("name", "")) 
+                        and not is_ignored_folder_path(f.get("rel_path", ""))
+                    ]
                     _ALL_FOLDERS_CACHE = disk_folders
                     _ALL_FOLDERS_CACHE_TIME = FOLDERS_CACHE_FILE.stat().st_mtime
                     if (now - _ALL_FOLDERS_CACHE_TIME) > ALL_FOLDERS_CACHE_TTL and not _IS_CRAWLING_FOLDERS:
@@ -510,6 +551,9 @@ def search_folders(query: str, limit: int = 100) -> List[Dict[str, Any]]:
     path_matches = []
 
     for f in all_folders:
+        if is_ignored_folder_name(f.get("name", "")) or is_ignored_folder_path(f.get("rel_path", "")):
+            continue
+
         fn_lower = f["name"].lower()
         rel_lower = f["rel_path"].lower()
 

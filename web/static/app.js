@@ -16,12 +16,47 @@ document.addEventListener("DOMContentLoaded", () => {
     setupKeyboardListeners();
     makeModalDraggable("folder-modal");
     makeModalDraggable("edit-lesson-modal");
+    makeModalResizable("folder-modal");
+    makeModalResizable("edit-lesson-modal");
+    restoreModalState("folder-modal");
+    restoreModalState("edit-lesson-modal");
     syncSortOrderUI();
 });
 
 // ==========================================
-// Floating Draggable Modals Mechanism
+// Floating Draggable & Resizable Modals Mechanism
 // ==========================================
+function restoreModalState(modalId) {
+    const modal = document.getElementById(modalId);
+    if (!modal) return;
+    const box = modal.querySelector(".modal-box");
+    if (!box) return;
+
+    try {
+        const savedPos = sessionStorage.getItem(`${modalId}-pos`);
+        if (savedPos) {
+            const parsed = JSON.parse(savedPos);
+            if (typeof parsed.x === "number" && typeof parsed.y === "number") {
+                box.style.transform = `translate3d(${parsed.x}px, ${parsed.y}px, 0)`;
+                if (box._setDragCoords) {
+                    box._setDragCoords(parsed.x, parsed.y);
+                }
+            }
+        }
+        const savedSize = sessionStorage.getItem(`${modalId}-size`);
+        if (savedSize) {
+            const parsed = JSON.parse(savedSize);
+            if (parsed.width && parsed.height) {
+                box.style.width = `${parsed.width}px`;
+                box.style.height = `${parsed.height}px`;
+                box.style.maxWidth = "none";
+            }
+        }
+    } catch (e) {
+        console.warn("Failed restoring modal state:", e);
+    }
+}
+
 function makeModalDraggable(modalId) {
     const modal = document.getElementById(modalId);
     if (!modal) return;
@@ -38,14 +73,25 @@ function makeModalDraggable(modalId) {
     let currentX = 0;
     let currentY = 0;
 
+    box._setDragCoords = function(x, y) {
+        currentX = x;
+        currentY = y;
+    };
+
     box._resetDrag = function() {
         currentX = 0;
         currentY = 0;
         box.style.transform = "";
+        box.style.width = "";
+        box.style.height = "";
+        try {
+            sessionStorage.removeItem(`${modalId}-pos`);
+            sessionStorage.removeItem(`${modalId}-size`);
+        } catch (e) {}
     };
 
     function onPointerDown(e) {
-        if (e.target.closest("button, input, select, textarea, a")) return;
+        if (e.target.closest("button, input, select, textarea, a, .modal-resize-handle")) return;
 
         isDragging = true;
         header.style.cursor = "grabbing";
@@ -94,10 +140,99 @@ function makeModalDraggable(modalId) {
         window.removeEventListener("mouseup", onPointerUp);
         window.removeEventListener("touchmove", onPointerMove);
         window.removeEventListener("touchend", onPointerUp);
+
+        try {
+            sessionStorage.setItem(`${modalId}-pos`, JSON.stringify({ x: currentX, y: currentY }));
+        } catch (e) {}
     }
 
     header.addEventListener("mousedown", onPointerDown);
     header.addEventListener("touchstart", onPointerDown, { passive: true });
+}
+
+function makeModalResizable(modalId) {
+    const modal = document.getElementById(modalId);
+    if (!modal) return;
+    const box = modal.querySelector(".modal-box");
+    if (!box) return;
+
+    // Both bottom-left (for RTL) and bottom-right (for LTR) handles
+    let handleBL = box.querySelector(".modal-resize-handle.handle-bl");
+    if (!handleBL) {
+        handleBL = document.createElement("div");
+        handleBL.className = "modal-resize-handle handle-bl";
+        handleBL.title = "גרור כדי לשנות את גודל החלון";
+        handleBL.innerHTML = `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M2 14h2v-2H2v2zm0-4h2V8H2v2zm4 4h2v-2H6v2zm-4-8h2V4H2v2zm8 8h2v-2h-2v2zm-4-4h2V8H6v2z"/></svg>`;
+        box.appendChild(handleBL);
+    }
+
+    let handleBR = box.querySelector(".modal-resize-handle.handle-br");
+    if (!handleBR) {
+        handleBR = document.createElement("div");
+        handleBR.className = "modal-resize-handle handle-br";
+        handleBR.title = "גרור כדי לשנות את גודל החלון";
+        handleBR.innerHTML = `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M14 14h-2v-2h2v2zm0-4h-2V8h2v2zm-4 4h-2v-2h2v2zm0-4h-2V8h2v2zm4-4h-2V4h2v2zm-8 8H4v-2h2v2z"/></svg>`;
+        box.appendChild(handleBR);
+    }
+
+    [ { el: handleBL, isLeft: true }, { el: handleBR, isLeft: false } ].forEach(({ el, isLeft }) => {
+        el.addEventListener("mousedown", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const startW = box.offsetWidth;
+            const startH = box.offsetHeight;
+            const startX = e.clientX;
+            const startY = e.clientY;
+            box.classList.add("is-resizing");
+
+            function onMouseMove(moveEvent) {
+                const deltaX = moveEvent.clientX - startX;
+                const deltaY = moveEvent.clientY - startY;
+                const widthChange = isLeft ? -deltaX : deltaX;
+
+                const newW = Math.max(480, Math.min(window.innerWidth * 0.96, startW + widthChange));
+                const newH = Math.max(380, Math.min(window.innerHeight * 0.94, startH + deltaY));
+
+                box.style.width = `${newW}px`;
+                box.style.height = `${newH}px`;
+                box.style.maxWidth = "none";
+            }
+
+            function onMouseUp() {
+                box.classList.remove("is-resizing");
+                window.removeEventListener("mousemove", onMouseMove);
+                window.removeEventListener("mouseup", onMouseUp);
+                try {
+                    sessionStorage.setItem(`${modalId}-size`, JSON.stringify({
+                        width: box.offsetWidth,
+                        height: box.offsetHeight
+                    }));
+                } catch (err) {}
+            }
+
+            window.addEventListener("mousemove", onMouseMove);
+            window.addEventListener("mouseup", onMouseUp);
+        });
+    });
+
+    if (window.ResizeObserver) {
+        let timer = null;
+        const ro = new ResizeObserver(() => {
+            if (box.classList.contains("is-resizing")) return;
+            clearTimeout(timer);
+            timer = setTimeout(() => {
+                if (box.offsetWidth > 0 && box.offsetHeight > 0) {
+                    try {
+                        sessionStorage.setItem(`${modalId}-size`, JSON.stringify({
+                            width: box.offsetWidth,
+                            height: box.offsetHeight
+                        }));
+                    } catch (e) {}
+                }
+            }, 250);
+        });
+        ro.observe(box);
+    }
 }
 
 
@@ -363,7 +498,7 @@ function renderPendingLessons() {
                 <div class="player-container">
                     <div class="audio-controls">
                         <button class="btn-icon btn-skip" onclick="skipAudio('${index}', -10)" title="10 שניות אחורה"><span>⏪</span><span>10</span></button>
-                        <button class="btn-icon btn-play" id="play-btn-${index}" onclick="togglePlay('${index}')">▶</button>
+                        <button class="btn-icon btn-play" id="play-btn-${index}" onclick="togglePlay('${index}')" onkeydown="handleLessonCardKeyDown(event, ${index}, 'play')">▶</button>
                         <button class="btn-icon btn-skip" onclick="skipAudio('${index}', 10)" title="10 שניות קדימה"><span>10</span><span>⏩</span></button>
                     </div>
                     <div class="progress-wrap">
@@ -401,7 +536,7 @@ function renderPendingLessons() {
                         <button id="save-btn-${index}" class="btn btn-success" onclick="classifyLesson('${index}', '${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}', '${encodeURIComponent(lesson.full_path || '').replace(/'/g, '%27')}')" onkeydown="handleLessonCardKeyDown(event, ${index}, 'save')">
                             💾 שמור וסווג
                         </button>
-                        <button type="button" class="btn btn-danger" onclick="deleteLesson('${index}', '${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}', '${encodeURIComponent(lesson.full_path || '').replace(/'/g, '%27')}')" title="מחק הקלטה לצמיתות">
+                        <button type="button" id="delete-btn-${index}" class="btn btn-danger" onclick="deleteLesson('${index}', '${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}', '${encodeURIComponent(lesson.full_path || '').replace(/'/g, '%27')}')" onkeydown="handleLessonCardKeyDown(event, ${index}, 'delete')" title="מחק הקלטה לצמיתות">
                             🗑️ מחק
                         </button>
                     </div>
@@ -409,6 +544,13 @@ function renderPendingLessons() {
             </div>
         `;
     }).join("");
+
+    // Auto-focus first card if no active focus
+    setTimeout(() => {
+        if (!document.activeElement || document.activeElement === document.body) {
+            focusCardField(0, "rabbi");
+        }
+    }, 150);
 }
 
 // Audio Controls
@@ -598,6 +740,24 @@ function navigateToBreadcrumb(index) {
     }
 }
 
+function isIgnoredFolderName(name) {
+    if (!name) return true;
+    const n = String(name).trim();
+    if (n.startsWith(".")) return true;
+    if (n.includes("הגברת החירות")) return true;
+    if (n.includes("אחראי שמע")) return true;
+    if (n.includes("ארכיון")) return true;
+    const lower = n.toLowerCase();
+    if (["שיעורים למיון", "incoming", "needs_review", "lost+found", "$recycle.bin", "system volume information"].includes(lower)) return true;
+    return false;
+}
+
+function isIgnoredFolderPath(relPath) {
+    if (!relPath) return false;
+    const parts = String(relPath).replace(/\\/g, "/").split("/").filter(Boolean);
+    return parts.some(p => isIgnoredFolderName(p));
+}
+
 async function fetchFolderContent(path = "") {
     stopModalAudioPreview();
     const listContainer = document.getElementById("modal-folders-list");
@@ -616,7 +776,7 @@ async function fetchFolderContent(path = "") {
         }
         const data = await res.json();
         if (data && data.subfolders) {
-            data.subfolders = data.subfolders.filter(sub => !sub.name.includes("הגברת החירות"));
+            data.subfolders = data.subfolders.filter(sub => !isIgnoredFolderName(sub.name) && !isIgnoredFolderPath(sub.rel_path));
         }
         currentFolderData = data;
         if (data) { 
@@ -653,7 +813,7 @@ function handleFolderSearchInput() {
 
     // 1. Instant local filter if currently in a folder with subfolders
     const currentSubfolders = (currentFolderData && currentFolderData.subfolders) ? currentFolderData.subfolders : [];
-    const localFiltered = currentSubfolders.filter(s => s.name.toLowerCase().includes(q.toLowerCase()));
+    const localFiltered = currentSubfolders.filter(s => !isIgnoredFolderName(s.name) && !isIgnoredFolderPath(s.rel_path) && s.name.toLowerCase().includes(q.toLowerCase()));
 
     if (localFiltered.length > 0) {
         renderFolderSearchResults(localFiltered, q, true, true);
@@ -681,7 +841,7 @@ function handleFolderSearchInput() {
             }
             const data = await res.json();
             if (document.getElementById("modal-folder-search-input") && document.getElementById("modal-folder-search-input").value.trim() === q) {
-                currentFolderSearchResults = (data.results || []).filter(item => !item.name.includes("הגברת החירות"));
+                currentFolderSearchResults = (data.results || []).filter(item => !isIgnoredFolderName(item.name) && !isIgnoredFolderPath(item.rel_path));
                 highlightedSearchResultIndex = 0;
                 renderFolderSearchResults(currentFolderSearchResults, q, false, false);
             }
@@ -815,8 +975,7 @@ function openFolderExplorer(cardIndex) {
     clearFolderSearch(false);
     highlightedFolderIndex = 0;
     highlightedSearchResultIndex = 0;
-    const box = document.querySelector("#folder-modal .modal-box");
-    if (box && box._resetDrag) box._resetDrag();
+    restoreModalState("folder-modal");
     const currentStoredPath = getStoredFolderPath();
     fetchFolderContent(currentStoredPath);
     document.getElementById("folder-modal").classList.add("open");
@@ -950,7 +1109,7 @@ function renderExplorerView() {
         `;
     }
 
-    const subfolders = (currentFolderData.subfolders || []).filter(sub => !sub.name.includes("הגברת החירות"));
+    const subfolders = (currentFolderData.subfolders || []).filter(sub => !isIgnoredFolderName(sub.name) && !isIgnoredFolderPath(sub.rel_path));
 
     if (subfolders.length === 0) {
         listContainer.innerHTML = audioFilesHtml + `
@@ -984,16 +1143,33 @@ function renderExplorerView() {
 
 function handleItemClick(index) {
     if (!currentFolderData) return;
-    const subfolders = currentFolderData.subfolders || [];
+    const subfolders = (currentFolderData.subfolders || []).filter(sub => !isIgnoredFolderName(sub.name) && !isIgnoredFolderPath(sub.rel_path));
     const item = subfolders[index];
     if (item) {
         fetchFolderContent(item.full_path);
     }
 }
 
+let isKeyboardNavigating = false;
+let lastMousePos = { x: 0, y: 0 };
+
+window.addEventListener("mousemove", (e) => {
+    if (Math.abs(e.clientX - lastMousePos.x) > 3 || Math.abs(e.clientY - lastMousePos.y) > 3) {
+        isKeyboardNavigating = false;
+        lastMousePos = { x: e.clientX, y: e.clientY };
+    }
+});
+
 function setHighlightedIndex(index) {
+    if (isKeyboardNavigating) return;
     highlightedFolderIndex = index;
     updateHighlightedUI();
+}
+
+function setSearchHighlightedIndex(index) {
+    if (isKeyboardNavigating) return;
+    highlightedSearchResultIndex = index;
+    updateSearchHighlightedUI();
 }
 
 function updateHighlightedUI() {
@@ -1015,6 +1191,10 @@ function scrollHighlightedIntoView() {
 // ==========================================
 
 function handleFolderModalGlobalKeyDown(e) {
+    if (e._modalHandled) return;
+    e._modalHandled = true;
+    isKeyboardNavigating = true;
+
     const searchInput = document.getElementById("modal-folder-search-input");
     const newFolderInput = document.getElementById("new-folder-input");
     const isSearchFocused = (document.activeElement === searchInput);
@@ -1059,42 +1239,42 @@ function handleFolderModalGlobalKeyDown(e) {
 
     const isSearching = (currentFolderSearchResults !== null);
     const subfolders = (currentFolderData && currentFolderData.subfolders)
-        ? currentFolderData.subfolders.filter(s => !s.name.includes("הגברת החירות"))
+        ? currentFolderData.subfolders.filter(s => !isIgnoredFolderName(s.name) && !isIgnoredFolderPath(s.rel_path))
         : [];
 
-    // ArrowDown
+    // ArrowDown: Move exactly 1 item down without skipping
     if (e.key === "ArrowDown") {
         e.preventDefault();
         if (isSearching && currentFolderSearchResults && currentFolderSearchResults.length > 0) {
-            highlightedSearchResultIndex = (highlightedSearchResultIndex + 1) % currentFolderSearchResults.length;
+            highlightedSearchResultIndex = Math.min(currentFolderSearchResults.length - 1, highlightedSearchResultIndex + 1);
             updateSearchHighlightedUI();
             const el = document.getElementById(`search-res-${highlightedSearchResultIndex}`);
             if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
         } else if (!isSearching && subfolders.length > 0) {
-            highlightedFolderIndex = (highlightedFolderIndex + 1) % subfolders.length;
+            highlightedFolderIndex = Math.min(subfolders.length - 1, highlightedFolderIndex + 1);
             updateHighlightedUI();
             scrollHighlightedIntoView();
         }
         return;
     }
 
-    // ArrowUp
+    // ArrowUp: Move exactly 1 item up without skipping
     if (e.key === "ArrowUp") {
         e.preventDefault();
         if (isSearching && currentFolderSearchResults && currentFolderSearchResults.length > 0) {
-            highlightedSearchResultIndex = (highlightedSearchResultIndex - 1 + currentFolderSearchResults.length) % currentFolderSearchResults.length;
+            highlightedSearchResultIndex = Math.max(0, highlightedSearchResultIndex - 1);
             updateSearchHighlightedUI();
             const el = document.getElementById(`search-res-${highlightedSearchResultIndex}`);
             if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
         } else if (!isSearching && subfolders.length > 0) {
-            highlightedFolderIndex = (highlightedFolderIndex - 1 + subfolders.length) % subfolders.length;
+            highlightedFolderIndex = Math.max(0, highlightedFolderIndex - 1);
             updateHighlightedUI();
             scrollHighlightedIntoView();
         }
         return;
     }
 
-    // Enter
+    // Enter: Enter folder or confirm
     if (e.key === "Enter") {
         e.preventDefault();
         if (isSearching && currentFolderSearchResults && currentFolderSearchResults.length > 0) {
@@ -1150,33 +1330,68 @@ function handleFolderModalGlobalKeyDown(e) {
     }
 }
 
-function handleLessonCardKeyDown(e, index, field) {
-    if (e.key === "Enter") {
-        if (e.ctrlKey) {
-            e.preventDefault();
-            const saveBtn = document.getElementById(`save-btn-${index}`);
-            if (saveBtn) saveBtn.click();
-            return;
-        }
+function focusCardField(cardIndex, fieldName = "rabbi") {
+    const card = document.getElementById(`card-${cardIndex}`);
+    if (!card) return false;
+    card.scrollIntoView({ block: "nearest", behavior: "smooth" });
 
+    let el = null;
+    if (fieldName === "rabbi") el = document.getElementById(`rabbi-${cardIndex}`);
+    else if (fieldName === "topic") el = document.getElementById(`topic-${cardIndex}`);
+    else if (fieldName === "date") el = document.getElementById(`date-${cardIndex}`);
+    else if (fieldName === "folder") el = document.getElementById(`folder-btn-${cardIndex}`);
+    else if (fieldName === "save") el = document.getElementById(`save-btn-${cardIndex}`);
+    else if (fieldName === "delete") el = document.getElementById(`delete-btn-${cardIndex}`);
+    else if (fieldName === "play") el = document.getElementById(`play-btn-${cardIndex}`);
+
+    if (!el) el = document.getElementById(`rabbi-${cardIndex}`);
+    if (el) {
+        el.focus();
+        if (el.tagName === "INPUT") el.select();
+        return true;
+    }
+    return false;
+}
+
+function handleLessonCardKeyDown(e, index, field) {
+    // 1. Save shortcut (Ctrl + Enter) from anywhere in card
+    if (e.ctrlKey && e.key === "Enter") {
+        e.preventDefault();
+        const saveBtn = document.getElementById(`save-btn-${index}`);
+        if (saveBtn) saveBtn.click();
+        return;
+    }
+
+    // 2. Audio playback toggle shortcut (Ctrl + Space or Alt + P)
+    if ((e.ctrlKey && e.key === " ") || (e.altKey && (e.key === "p" || e.key === "P"))) {
+        e.preventDefault();
+        togglePlay(index);
+        return;
+    }
+
+    // 3. Audio skip shortcuts (Alt + Left / Alt + Right)
+    if (e.altKey && e.key === "ArrowLeft") {
+        e.preventDefault();
+        skipAudio(index, 10);
+        return;
+    }
+    if (e.altKey && e.key === "ArrowRight") {
+        e.preventDefault();
+        skipAudio(index, -10);
+        return;
+    }
+
+    // 4. Enter workflow navigation
+    if (e.key === "Enter") {
         e.preventDefault();
         if (field === "rabbi") {
-            const topicInput = document.getElementById(`topic-${index}`);
-            if (topicInput) {
-                topicInput.focus();
-                topicInput.select();
-            }
+            focusCardField(index, "topic");
         } else if (field === "topic") {
-            const dateInput = document.getElementById(`date-${index}`);
-            if (dateInput) {
-                dateInput.focus();
-                dateInput.select();
-            }
+            focusCardField(index, "date");
         } else if (field === "date") {
             const destPath = document.getElementById(`dest-path-${index}`)?.value;
             if (destPath) {
-                const saveBtn = document.getElementById(`save-btn-${index}`);
-                if (saveBtn) saveBtn.focus();
+                focusCardField(index, "save");
             } else {
                 openFolderExplorer(index);
             }
@@ -1185,55 +1400,68 @@ function handleLessonCardKeyDown(e, index, field) {
         } else if (field === "save") {
             const saveBtn = document.getElementById(`save-btn-${index}`);
             if (saveBtn) saveBtn.click();
+        } else if (field === "delete") {
+            const delBtn = document.getElementById(`delete-btn-${index}`);
+            if (delBtn) delBtn.click();
+        } else if (field === "play") {
+            togglePlay(index);
         }
-    } else if (e.key === "ArrowDown") {
-        if (e.altKey) {
-            e.preventDefault();
-            focusLessonCard(index + 1);
-        } else if (e.target.tagName === "INPUT") {
-            const input = e.target;
-            if (input.selectionStart === input.value.length) {
-                e.preventDefault();
-                if (field === "rabbi") {
-                    const el = document.getElementById(`topic-${index}`);
-                    if (el) { el.focus(); el.select(); }
-                } else if (field === "topic") {
-                    const el = document.getElementById(`date-${index}`);
-                    if (el) { el.focus(); el.select(); }
-                } else if (field === "date") {
-                    document.getElementById(`folder-btn-${index}`)?.focus();
-                }
-            }
+        return;
+    }
+
+    // 5. ArrowDown: Move to same field in next card below!
+    if (e.key === "ArrowDown") {
+        e.preventDefault();
+        const nextCard = index + 1;
+        if (document.getElementById(`card-${nextCard}`)) {
+            focusCardField(nextCard, field);
         }
-    } else if (e.key === "ArrowUp") {
-        if (e.altKey) {
-            e.preventDefault();
-            focusLessonCard(index - 1);
-        } else if (e.target.tagName === "INPUT") {
-            const input = e.target;
-            if (input.selectionStart === 0 && input.selectionEnd === 0) {
-                e.preventDefault();
-                if (field === "topic") {
-                    const el = document.getElementById(`rabbi-${index}`);
-                    if (el) { el.focus(); el.select(); }
-                } else if (field === "date") {
-                    const el = document.getElementById(`topic-${index}`);
-                    if (el) { el.focus(); el.select(); }
-                }
-            }
+        return;
+    }
+
+    // 6. ArrowUp: Move to same field in previous card above!
+    if (e.key === "ArrowUp") {
+        e.preventDefault();
+        const prevCard = index - 1;
+        if (prevCard >= 0 && document.getElementById(`card-${prevCard}`)) {
+            focusCardField(prevCard, field);
         }
+        return;
+    }
+
+    // 7. ArrowLeft (In RTL: move forward to the left in the horizontal form row)
+    if (e.key === "ArrowLeft") {
+        const isInput = (e.target.tagName === "INPUT");
+        if (isInput && e.target.selectionStart !== e.target.value.length && e.target.selectionEnd !== e.target.value.length) {
+            return;
+        }
+        e.preventDefault();
+        if (field === "rabbi") focusCardField(index, "topic");
+        else if (field === "topic") focusCardField(index, "date");
+        else if (field === "date") focusCardField(index, "folder");
+        else if (field === "folder") focusCardField(index, "save");
+        else if (field === "save") focusCardField(index, "delete");
+        return;
+    }
+
+    // 8. ArrowRight (In RTL: move backward to the right in the horizontal form row)
+    if (e.key === "ArrowRight") {
+        const isInput = (e.target.tagName === "INPUT");
+        if (isInput && e.target.selectionStart !== 0) {
+            return;
+        }
+        e.preventDefault();
+        if (field === "delete") focusCardField(index, "save");
+        else if (field === "save") focusCardField(index, "folder");
+        else if (field === "folder") focusCardField(index, "date");
+        else if (field === "date") focusCardField(index, "topic");
+        else if (field === "topic") focusCardField(index, "rabbi");
+        return;
     }
 }
 
 function focusLessonCard(index) {
-    const card = document.getElementById(`card-${index}`);
-    if (!card) return;
-    card.scrollIntoView({ block: "center", behavior: "smooth" });
-    const rabbiInput = document.getElementById(`rabbi-${index}`);
-    if (rabbiInput) {
-        rabbiInput.focus();
-        rabbiInput.select();
-    }
+    focusCardField(index, "rabbi");
 }
 
 function getActiveCardIndex() {
@@ -1326,21 +1554,42 @@ function setupKeyboardListeners() {
         }
 
         // 3. Main Dashboard Navigation
-        // Alt + ArrowDown / PageDown: Next card
-        if ((e.altKey && e.key === "ArrowDown") || e.key === "PageDown") {
-            e.preventDefault();
-            navigateCardDelta(1);
-            return;
-        }
-        // Alt + ArrowUp / PageUp: Previous card
-        if ((e.altKey && e.key === "ArrowUp") || e.key === "PageUp") {
-            e.preventDefault();
-            navigateCardDelta(-1);
-            return;
+        const activeTag = document.activeElement ? document.activeElement.tagName : "";
+        const isTyping = ["INPUT", "TEXTAREA", "SELECT"].includes(activeTag);
+
+        // When not typing in an input:
+        if (!isTyping) {
+            // ArrowDown / PageDown: Next card
+            if (e.key === "ArrowDown" || e.key === "PageDown") {
+                e.preventDefault();
+                navigateCardDelta(1);
+                return;
+            }
+            // ArrowUp / PageUp: Previous card
+            if (e.key === "ArrowUp" || e.key === "PageUp") {
+                e.preventDefault();
+                navigateCardDelta(-1);
+                return;
+            }
+            // Enter on card: focus rabbi field to start editing
+            if (e.key === "Enter") {
+                e.preventDefault();
+                const activeCard = getActiveCardIndex() ?? 0;
+                focusCardField(activeCard, "rabbi");
+                return;
+            }
+            // Space / Alt+P: play/pause audio of active card
+            if (e.key === " " || (e.altKey && (e.key === "p" || e.key === "P"))) {
+                e.preventDefault();
+                const activeCard = getActiveCardIndex() ?? 0;
+                togglePlay(activeCard);
+                return;
+            }
         }
 
-        // Alt + P: Audio play/pause for active card
-        if (e.altKey && (e.key === "p" || e.key === "P")) {
+        // Global shortcuts even if focused:
+        // Alt + P / Ctrl + Space: Audio play/pause for active card
+        if ((e.ctrlKey && e.key === " ") || (e.altKey && (e.key === "p" || e.key === "P"))) {
             e.preventDefault();
             const activeCard = getActiveCardIndex();
             if (activeCard !== null) {
@@ -1859,6 +2108,10 @@ async function openEditLessonModal(encodedFilename, noteId, btnElement = null, f
             folder_path: folderPath
         });
         const res = await fetch(`/api/lessons/details_for_edit?${queryParams.toString()}`);
+        if (res.status === 401) {
+            window.location.href = "/login";
+            return;
+        }
         const data = await res.json();
 
         if (!data.found) {
@@ -1882,8 +2135,7 @@ async function openEditLessonModal(encodedFilename, noteId, btnElement = null, f
         audio.src = `/api/audio/stream?filename=${encodeURIComponent(data.full_path).replace(/'/g, '%27')}`;
         audio.load();
 
-        const editBox = document.querySelector("#edit-lesson-modal .modal-box");
-        if (editBox && editBox._resetDrag) editBox._resetDrag();
+        restoreModalState("edit-lesson-modal");
         document.getElementById("edit-lesson-modal").classList.add("open");
     } catch (e) {
         alert("שגיאה בטעינת פרטי הקובץ: " + e.message);

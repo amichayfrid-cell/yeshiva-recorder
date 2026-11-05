@@ -10,7 +10,7 @@
 
     <title>מערכת מיון שיעורי הישיבה - ישיבת מצפה רמון</title>
 
-    <link rel="stylesheet" href="/static/style.css?v=3.5">
+    <link rel="stylesheet" href="/static/style.css?v=4.1">
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
 
@@ -52,7 +52,7 @@
 
             <button class="btn btn-outline" onclick="refreshAll()">🔄 רענן</button>
 
-            <a href="/logout" class="btn btn-outline">יציאה</a>
+            <a href="/logout" class="btn btn-outline" onclick="sessionStorage.clear()">יציאה</a>
 
         </div>
 
@@ -149,7 +149,7 @@
 
     <div id="edit-lesson-modal" class="modal-overlay" style="z-index: 1000;">
 
-        <div class="modal-box" style="max-width: 620px; width: 95%;">
+        <div class="modal-box">
 
             <div class="modal-header">
 
@@ -306,7 +306,6 @@
                            class="modal-search-input" 
                            placeholder="חיפוש תיקייה בשרת (למשל: הרב אורי, תשפ&quot;ז, עיון...)..." 
                            oninput="handleFolderSearchInput()" 
-                           onkeydown="handleFolderSearchKeyDown(event)"
                            autocomplete="off">
                     <button type="button" 
                             id="modal-search-clear-btn" 
@@ -364,7 +363,7 @@
 
     <script src="/static/security_guard.js"></script>
 
-    <script src="/static/app.js?v=3.8"></script>
+    <script src="/static/app.js?v=4.1"></script>
 
 </body>
 

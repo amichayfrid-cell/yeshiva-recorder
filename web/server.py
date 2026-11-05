@@ -534,7 +534,10 @@ def list_pending_lessons(request: Request):
                 custom_label = source_label
                 if source_key == "recorder":
                     rec = storage.get_recorder_source(f.name, filepath=f)
-                    if rec:
+                    norm_rec = storage.normalize_recorder_label(rec) if rec else None
+                    if norm_rec:
+                        custom_label = norm_rec
+                    elif rec and rec not in ("מקלט שמע", "מקלט O", "O"):
                         custom_label = rec
                 
                 lessons.append({
@@ -906,6 +909,11 @@ def locate_lesson_file(
     9. Check shallow semester/year folders (<10ms)
     """
     clean_fn = os.path.basename(filename.replace('\\', '/'))
+    try:
+        clean_fn = unquote(clean_fn)
+    except Exception:
+        pass
+    clean_fn = clean_fn.strip("'\"")
     norm_fn = normalize_hebrew_string(clean_fn).lower()
     fn_key = hebrew_compare_key(clean_fn)
 
