@@ -75,8 +75,21 @@ def get_final_target_dir() -> Path:
         return NETWORK_TARGET_DIR
     return LOCAL_STAGING_DIR
 
-def get_upload_dirs() -> list[Path]:
-    """Returns all available directories containing uploaded lessons."""
+_UPLOAD_DIRS_CACHE: Optional[list[Path]] = None
+_UPLOAD_DIRS_CACHE_TIME: float = 0.0
+_UPLOAD_DIRS_TTL: float = 20.0
+
+def invalidate_upload_dirs_cache():
+    global _UPLOAD_DIRS_CACHE
+    _UPLOAD_DIRS_CACHE = None
+
+def get_upload_dirs(force_refresh: bool = False) -> list[Path]:
+    """Returns all available directories containing uploaded lessons (cached for 20s)."""
+    global _UPLOAD_DIRS_CACHE, _UPLOAD_DIRS_CACHE_TIME
+    now = time.time()
+    if not force_refresh and _UPLOAD_DIRS_CACHE is not None and (now - _UPLOAD_DIRS_CACHE_TIME) < _UPLOAD_DIRS_TTL:
+        return list(_UPLOAD_DIRS_CACHE)
+
     candidates: list[Path] = []
     
     # 1. Dedicated CIFS mount (/mnt/yeshiva_upload)
@@ -86,17 +99,19 @@ def get_upload_dirs() -> list[Path]:
             # Try on-demand mount via fstab/subproc
             try:
                 import subprocess
-                subprocess.run(["mount", str(NETWORK_UPLOAD_MOUNT)], capture_output=True, timeout=2)
+                subprocess.run(["mount", str(NETWORK_UPLOAD_MOUNT)], capture_output=True, timeout=1)
                 is_mounted = is_path_mounted(NETWORK_UPLOAD_MOUNT)
             except Exception:
                 pass
                 
         has_audio = False
         try:
-            for item in NETWORK_UPLOAD_MOUNT.iterdir():
-                if not item.name.startswith(".") and (item.is_dir() or item.suffix.lower() in USB_AUDIO_EXTENSIONS):
-                    has_audio = True
-                    break
+            import os
+            with os.scandir(str(NETWORK_UPLOAD_MOUNT)) as it:
+                for entry in it:
+                    if not entry.name.startswith(".") and (entry.is_dir() or entry.name.lower().endswith(tuple(USB_AUDIO_EXTENSIONS))):
+                        has_audio = True
+                        break
         except Exception:
             pass
             
@@ -111,10 +126,13 @@ def get_upload_dirs() -> list[Path]:
     # 3. Any directory named 'העלאת שיעורים' inside NETWORK_MOUNT_POINT
     if is_network_share_mounted():
         try:
-            for item in NETWORK_MOUNT_POINT.iterdir():
-                if item.is_dir() and "העלאת שיעורים" in item.name:
-                    if item not in candidates:
-                        candidates.append(item)
+            import os
+            with os.scandir(str(NETWORK_MOUNT_POINT)) as it:
+                for entry in it:
+                    if entry.is_dir() and "העלאת שיעורים" in entry.name:
+                        p_entry = Path(entry.path)
+                        if p_entry not in candidates:
+                            candidates.append(p_entry)
         except Exception:
             pass
 
@@ -123,7 +141,9 @@ def get_upload_dirs() -> list[Path]:
         if not candidates:
             candidates.append(LOCAL_UPLOAD_DIR)
 
-    return candidates
+    _UPLOAD_DIRS_CACHE = candidates
+    _UPLOAD_DIRS_CACHE_TIME = now
+    return list(candidates)
 
 def get_upload_dir() -> Optional[Path]:
     """Returns the primary upload directory if available."""

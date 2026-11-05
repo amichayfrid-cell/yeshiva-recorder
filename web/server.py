@@ -29,6 +29,24 @@ from web import storage
 
 app = FastAPI(title="מערכת מיון שיעורי הישיבה", version="2.0.0")
 
+try:
+    from starlette.middleware.gzip import GZipMiddleware
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
+except Exception:
+    try:
+        from fastapi.middleware.gzip import GZipMiddleware
+        app.add_middleware(GZipMiddleware, minimum_size=1000)
+    except Exception:
+        pass
+
+@app.middleware("http")
+async def add_performance_cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        if "cache-control" not in response.headers:
+            response.headers["Cache-Control"] = "public, max-age=86400"
+    return response
+
 BASE_WEB_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_WEB_DIR / "templates"
 STATIC_DIR = BASE_WEB_DIR / "static"
@@ -406,10 +424,50 @@ def submit_student_note(
     )
     return JSONResponse({"status": "success", "note": note})
 
+_PENDING_LESSONS_CACHE: Optional[Dict[str, Any]] = None
+_PENDING_LESSONS_CACHE_TIME: float = 0.0
+_PENDING_CACHE_TTL: float = 3.5
+
+def invalidate_pending_lessons_cache():
+    global _PENDING_LESSONS_CACHE
+    _PENDING_LESSONS_CACHE = None
+
+def _fast_scan_dir_audio(dir_path: Path, recursive: bool = False, max_depth: int = 2) -> list[tuple[Path, os.stat_result]]:
+    """High-speed audio file scanner using os.scandir with depth limit to avoid slow recursive SMB crawling."""
+    results = []
+    ignored = {"$RECYCLE.BIN", "System Volume Information", "lost+found", ".part_"}
+    
+    def _walk(curr: str, depth: int):
+        try:
+            with os.scandir(curr) as it:
+                for entry in it:
+                    if entry.name.startswith(".") or "smb" in entry.name.lower():
+                        continue
+                    try:
+                        if entry.is_file(follow_symlinks=False):
+                            ext = os.path.splitext(entry.name)[1].lower()
+                            if ext in config.USB_AUDIO_EXTENSIONS and not any(entry.name.startswith(p) for p in ignored):
+                                results.append((Path(entry.path), entry.stat(follow_symlinks=False)))
+                        elif recursive and depth < max_depth and entry.is_dir(follow_symlinks=False):
+                            if entry.name not in ignored and "הגברת החירות" not in entry.name:
+                                _walk(entry.path, depth + 1)
+                    except OSError:
+                        continue
+        except (OSError, PermissionError):
+            pass
+
+    _walk(str(dir_path), 0)
+    return results
+
 @app.get("/api/lessons/pending")
 def list_pending_lessons(request: Request):
     if not is_authenticated(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+    global _PENDING_LESSONS_CACHE, _PENDING_LESSONS_CACHE_TIME
+    now_ts = time.time()
+    if _PENDING_LESSONS_CACHE is not None and (now_ts - _PENDING_LESSONS_CACHE_TIME) < _PENDING_CACHE_TTL:
+        return JSONResponse(_PENDING_LESSONS_CACHE)
 
     lessons = []
     
@@ -435,32 +493,23 @@ def list_pending_lessons(request: Request):
         except Exception:
             continue
 
+    # Pre-index student notes once for O(1) in-memory lookup
+    open_notes = [n for n in storage.get_notes_data() if n.get("status") == "open"]
+    notes_by_filename = {}
+    for n in open_notes:
+        fn_clean = os.path.basename(n.get("filename", "").replace('\\', '/'))
+        notes_by_filename.setdefault(fn_clean, []).append(n)
+
     for target_dir, source_key, source_label, source_badge_class in scan_sources:
         if not target_dir.exists():
             continue
-        entries = []
-        try:
-            # For upload directory check recursively, for sorting_dir check direct files
-            scan_iter = target_dir.rglob("*") if source_key == "upload" else target_dir.iterdir()
-            for p in scan_iter:
-                try:
-                    if p.name.startswith(".") or "smb" in p.name.lower():
-                        continue
-
-                    # STRICT AUDIO ONLY: filter out text (.txt), docs (.docx, .doc), pdf, etc.
-                    if p.is_file() and p.suffix.lower() in config.USB_AUDIO_EXTENSIONS:
-                        st = p.stat()
-                        entries.append((p, st))
-                except (OSError, FileNotFoundError, PermissionError):
-                    continue
-        except (OSError, FileNotFoundError, PermissionError):
-            pass
+        entries = _fast_scan_dir_audio(target_dir, recursive=(source_key == "upload"), max_depth=2)
 
         for f, st in entries:
             try:
                 file_dt = datetime.fromtimestamp(st.st_mtime)
                 hebrew_date = get_hebrew_date_str(file_dt)
-                notes = storage.get_notes_for_file(f.name)
+                notes = notes_by_filename.get(f.name, [])
                 
                 lessons.append({
                     "filename": f.name,
@@ -481,13 +530,17 @@ def list_pending_lessons(request: Request):
     # Sort all lessons descending by mtime (newest first)
     lessons.sort(key=lambda item: item.get("mtime", 0), reverse=True)
 
-    return JSONResponse({
+    result_payload = {
         "status": "success", 
         "lessons": lessons, 
         "target_dir": str(sorting_dir),
         "upload_dir": str(upload_dirs[0]) if upload_dirs else None,
         "upload_dirs": [str(d) for d in upload_dirs]
-    })
+    }
+    _PENDING_LESSONS_CACHE = result_payload
+    _PENDING_LESSONS_CACHE_TIME = now_ts
+
+    return JSONResponse(result_payload)
 
 @app.get("/api/audio/stream")
 def stream_audio(request: Request, filename: str = Query(...), source_path: Optional[str] = Query(None)):
@@ -526,6 +579,10 @@ def api_create_folder(request: Request, base_folder: str = Form(...), new_folder
 
     try:
         new_path = storage.create_new_folder(base_folder, new_folder_name)
+        if hasattr(storage, "FOLDER_CACHE"):
+            storage.FOLDER_CACHE.clear()
+        if hasattr(storage, "_ALL_FOLDERS_CACHE"):
+            storage._ALL_FOLDERS_CACHE = None
         return JSONResponse({"status": "success", "new_folder_path": new_path})
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=400)
@@ -587,6 +644,12 @@ def classify_lesson(
     # 3. Mark notes as resolved
     for note in storage.get_notes_for_file(filename):
         storage.update_note_status(note["id"], "resolved")
+
+    invalidate_pending_lessons_cache()
+    if hasattr(storage, "invalidate_notes_cache"):
+        storage.invalidate_notes_cache()
+    if hasattr(storage, "FOLDER_CACHE"):
+        storage.FOLDER_CACHE.clear()
 
     return JSONResponse({
         "status": "success",
@@ -885,6 +948,12 @@ def update_lesson(
     for note in storage.get_notes_for_file(source_file.name):
         storage.update_note_status(note["id"], "resolved")
 
+    invalidate_pending_lessons_cache()
+    if hasattr(storage, "invalidate_notes_cache"):
+        storage.invalidate_notes_cache()
+    if hasattr(storage, "FOLDER_CACHE"):
+        storage.FOLDER_CACHE.clear()
+
     return JSONResponse({
         "status": "success",
         "final_path": str(unique_dest_path),
@@ -923,6 +992,13 @@ def delete_lesson(
         # Resolve any open notes for this file
         for note in storage.get_notes_for_file(clean_fn):
             storage.update_note_status(note["id"], "resolved")
+
+        invalidate_pending_lessons_cache()
+        if hasattr(storage, "invalidate_notes_cache"):
+            storage.invalidate_notes_cache()
+        if hasattr(storage, "FOLDER_CACHE"):
+            storage.FOLDER_CACHE.clear()
+
         return JSONResponse({"status": "success", "message": "הקובץ נמחק בהצלחה"})
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)

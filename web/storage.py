@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional
@@ -10,14 +11,36 @@ from core.hebrew_date import get_hebrew_date_str
 
 NOTES_FILE = config.DATA_DIR / "notes.json"
 
+# In-memory notes cache with mtime and TTL validation
+_NOTES_CACHE: Optional[List[Dict[str, Any]]] = None
+_NOTES_CACHE_MTIME: float = 0.0
+_NOTES_CACHE_TIME: float = 0.0
+_NOTES_CACHE_TTL: float = 15.0
+
+def invalidate_notes_cache():
+    global _NOTES_CACHE
+    _NOTES_CACHE = None
+
+
 # In-memory folder cache (path -> (timestamp, data)) with 30-second TTL
 FOLDER_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
 CACHE_TTL_SEC = 30.0
 
 def get_notes_data() -> List[Dict[str, Any]]:
-    """Loads all student feedback notes and auto-deletes notes older than 30 days."""
+    """Loads all student feedback notes with in-memory caching and auto-deletes notes older than 30 days."""
+    global _NOTES_CACHE, _NOTES_CACHE_MTIME, _NOTES_CACHE_TIME
+    now_ts = time.time()
     if not NOTES_FILE.exists():
+        _NOTES_CACHE = []
         return []
+
+    try:
+        current_mtime = NOTES_FILE.stat().st_mtime
+        if _NOTES_CACHE is not None and (now_ts - _NOTES_CACHE_TIME < _NOTES_CACHE_TTL) and current_mtime == _NOTES_CACHE_MTIME:
+            return [dict(n) for n in _NOTES_CACHE]
+    except OSError:
+        pass
+
     try:
         with open(NOTES_FILE, "r", encoding="utf-8") as f:
             notes = json.load(f)
@@ -55,8 +78,14 @@ def get_notes_data() -> List[Dict[str, Any]]:
                     json.dump(valid_notes, f, ensure_ascii=False, indent=2)
             except Exception:
                 pass
-                
-        return valid_notes
+
+        try:
+            _NOTES_CACHE_MTIME = NOTES_FILE.stat().st_mtime
+        except OSError:
+            _NOTES_CACHE_MTIME = now_ts
+        _NOTES_CACHE_TIME = now_ts
+        _NOTES_CACHE = valid_notes
+        return [dict(n) for n in valid_notes]
     except Exception:
         return []
 
@@ -85,6 +114,7 @@ def save_note(
     }
     notes.insert(0, new_note)
     
+    invalidate_notes_cache()
     NOTES_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(NOTES_FILE, "w", encoding="utf-8") as f:
         json.dump(notes, f, ensure_ascii=False, indent=2)
@@ -101,6 +131,7 @@ def update_note_status(note_id: int, status: str) -> bool:
             updated = True
             break
     if updated:
+        invalidate_notes_cache()
         with open(NOTES_FILE, "w", encoding="utf-8") as f:
             json.dump(notes, f, ensure_ascii=False, indent=2)
     return updated
@@ -197,28 +228,20 @@ def list_direct_subfolders(target_path: Optional[str] = None) -> Dict[str, Any]:
 
 _ALL_FOLDERS_CACHE = None
 _ALL_FOLDERS_CACHE_TIME = 0.0
-ALL_FOLDERS_CACHE_TTL = 180.0  # 3 minutes
+_IS_CRAWLING_FOLDERS = False
+ALL_FOLDERS_CACHE_TTL = 300.0  # 5 minutes
 
-def get_all_folders_flat() -> List[Dict[str, Any]]:
-    """
-    Crawls the root folder and builds a flat list of all navigable directories.
-    Cached in memory for high-speed search without repeated disk/SMB hits.
-    """
-    global _ALL_FOLDERS_CACHE, _ALL_FOLDERS_CACHE_TIME
-    now = time.time()
-    if _ALL_FOLDERS_CACHE is not None and (now - _ALL_FOLDERS_CACHE_TIME) < ALL_FOLDERS_CACHE_TTL:
-        return _ALL_FOLDERS_CACHE
-
-    root_str = str(config.NETWORK_MOUNT_POINT if config.is_network_share_mounted() else config.LOCAL_STAGING_DIR)
-    if not os.path.isdir(root_str):
-        return []
-
-    ignored = {"שיעורים למיון", "incoming", "needs_review", "lost+found", "$RECYCLE.BIN", "System Volume Information"}
-    folders = []
-
+def _crawl_all_folders_worker():
+    global _ALL_FOLDERS_CACHE, _ALL_FOLDERS_CACHE_TIME, _IS_CRAWLING_FOLDERS
     try:
+        root_str = str(config.NETWORK_MOUNT_POINT if config.is_network_share_mounted() else config.LOCAL_STAGING_DIR)
+        if not os.path.isdir(root_str):
+            return
+
+        ignored = {"שיעורים למיון", "incoming", "needs_review", "lost+found", "$RECYCLE.BIN", "System Volume Information"}
+        folders = []
+
         for root, dirs, _ in os.walk(root_str):
-            # In-place filtering of ignored and hidden directories
             dirs[:] = [
                 d for d in dirs 
                 if not d.startswith(".") 
@@ -237,12 +260,40 @@ def get_all_folders_flat() -> List[Dict[str, Any]]:
                     "full_path": full_d,
                     "breadcrumb": breadcrumb
                 })
-    except Exception as e:
-        print(f"[Storage] Error crawling all folders: {e}")
 
-    _ALL_FOLDERS_CACHE = folders
-    _ALL_FOLDERS_CACHE_TIME = now
-    return folders
+        _ALL_FOLDERS_CACHE = folders
+        _ALL_FOLDERS_CACHE_TIME = time.time()
+    except Exception as e:
+        print(f"[Storage] Error in background folder crawl: {e}")
+    finally:
+        _IS_CRAWLING_FOLDERS = False
+
+def get_all_folders_flat() -> List[Dict[str, Any]]:
+    """
+    Crawls the root folder and builds a flat list of all navigable directories.
+    Uses Stale-While-Revalidate caching to never block user search requests.
+    """
+    global _ALL_FOLDERS_CACHE, _ALL_FOLDERS_CACHE_TIME, _IS_CRAWLING_FOLDERS
+    now = time.time()
+
+    # 1. Fresh cache hit
+    if _ALL_FOLDERS_CACHE is not None and (now - _ALL_FOLDERS_CACHE_TIME) < ALL_FOLDERS_CACHE_TTL:
+        return _ALL_FOLDERS_CACHE
+
+    # 2. Stale cache hit: return immediately and trigger background refresh
+    if _ALL_FOLDERS_CACHE is not None:
+        if not _IS_CRAWLING_FOLDERS:
+            _IS_CRAWLING_FOLDERS = True
+            threading.Thread(target=_crawl_all_folders_worker, daemon=True).start()
+        return _ALL_FOLDERS_CACHE
+
+    # 3. First time cold start: synchronously crawl
+    _IS_CRAWLING_FOLDERS = True
+    _crawl_all_folders_worker()
+    return _ALL_FOLDERS_CACHE or []
+
+# Pre-warm folder cache in background on module startup
+threading.Thread(target=_crawl_all_folders_worker, daemon=True).start()
 
 def search_folders(query: str, limit: int = 50) -> List[Dict[str, Any]]:
     """
