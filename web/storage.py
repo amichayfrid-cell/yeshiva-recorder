@@ -1,3 +1,4 @@
+import re
 import json
 import os
 import time
@@ -10,6 +11,126 @@ import config
 from core.hebrew_date import get_hebrew_date_str
 
 NOTES_FILE = config.DATA_DIR / "notes.json"
+
+RECORDER_SOURCES_FILE = config.DATA_DIR / "recorder_sources.json"
+_RECORDER_SOURCES_CACHE: Optional[Dict[str, str]] = None
+
+def normalize_recorder_label(raw_label: Optional[str]) -> Optional[str]:
+    """
+    Cleans and normalizes various recorder naming conventions into a clean Hebrew label.
+    Examples:
+    - 'מקלט 4', 'מקלט_4', 'מקלט-4', 'מקלט4' -> 'מקלט 4'
+    - 'RECORDER 4', 'RECORDER_4', 'REC-4', 'REC4' -> 'מקלט 4'
+    - 'MIKLET 4', 'MEKALET 4', 'MIKLET_4' -> 'מקלט 4'
+    - 'DOK 4', 'USB 4', 'USB4' -> 'מקלט 4'
+    - '4', '04' -> 'מקלט 4'
+    - 'מקלט ראשי', 'ספרייה', 'בית מדרש' -> 'מקלט בית מדרש' / keep custom
+    """
+    if not raw_label:
+        return None
+    clean = raw_label.strip()
+    if not clean:
+        return None
+    generic = {
+        'NO NAME', 'NONAME', 'UNTITLED', 'USB DISK', 'USB DRIVE', 'REMOVABLE',
+        'TRANSCEND', 'SANDISK', 'KINGSTON', 'FAT32', 'FAT16', 'EXFAT', 'VOLUME',
+        'NEW VOLUME', 'LOCAL DISK', 'DISK', 'USB', 'SD', 'DRIVE'
+    }
+    if clean.upper() in generic:
+        return None
+
+    # Check Hebrew pattern: 'מקלט X'
+    m_heb = re.search(r'מקלט[\s_-]*([0-9א-ת]+|[a-zA-Z]+)?', clean)
+    if m_heb:
+        suffix = m_heb.group(1)
+        if suffix:
+            return f"מקלט {suffix.strip()}"
+        return clean
+
+    # Check English pattern: 'RECORDER X', 'REC X', 'MIKLET X'
+    m_eng = re.search(r'(?:RECORDER|MIKLET|MEKALET|REC|DOK|USB)[\s_-]*([0-9]+|[a-zA-Z]|א-ת)', clean, re.IGNORECASE)
+    if m_eng:
+        val = m_eng.group(1).strip()
+        return f"מקלט {val}"
+
+    # Pure number e.g. '4' or '04'
+    m_num = re.fullmatch(r'0*([1-9][0-9]*)', clean)
+    if m_num:
+        return f"מקלט {m_num.group(1)}"
+
+    # Hebrew words
+    if any('֐' <= c <= '׿' for c in clean):
+        if not clean.startswith('מקלט'):
+            return f"מקלט {clean}"
+        return clean
+
+    return clean
+
+def get_recorder_sources() -> Dict[str, str]:
+    global _RECORDER_SOURCES_CACHE
+    if _RECORDER_SOURCES_CACHE is not None:
+        return dict(_RECORDER_SOURCES_CACHE)
+    if not RECORDER_SOURCES_FILE.exists():
+        _RECORDER_SOURCES_CACHE = {}
+        return {}
+    try:
+        with open(RECORDER_SOURCES_FILE, "r", encoding="utf-8") as f:
+            _RECORDER_SOURCES_CACHE = json.load(f)
+            return dict(_RECORDER_SOURCES_CACHE)
+    except Exception:
+        _RECORDER_SOURCES_CACHE = {}
+        return {}
+
+def get_recorder_source(filename: str, filepath: Optional[Path] = None) -> Optional[str]:
+    sources = get_recorder_sources()
+    clean_fn = os.path.basename(filename.replace('\\', '/'))
+    if clean_fn in sources:
+        return sources[clean_fn]
+
+    # Try reading from ID3 tag if filepath exists
+    if filepath and filepath.exists() and filepath.suffix.lower() == ".mp3":
+        try:
+            from mutagen.id3 import ID3
+            audio = ID3(str(filepath))
+            for frame in audio.getall("TXXX"):
+                if frame.desc.lower() in ("recorder", "recorder_name", "מקלט"):
+                    val = str(frame.text[0]).strip()
+                    if val:
+                        norm = normalize_recorder_label(val) or val
+                        set_recorder_source(clean_fn, norm)
+                        return norm
+        except Exception:
+            pass
+
+    return None
+
+def set_recorder_source(filename: str, source_label: str):
+    global _RECORDER_SOURCES_CACHE
+    sources = get_recorder_sources()
+    clean_fn = os.path.basename(filename.replace('\\', '/'))
+    clean_lbl = normalize_recorder_label(source_label) or source_label.strip()
+    sources[clean_fn] = clean_lbl
+    _RECORDER_SOURCES_CACHE = sources
+    try:
+        RECORDER_SOURCES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(RECORDER_SOURCES_FILE, "w", encoding="utf-8") as f:
+            json.dump(sources, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def remove_recorder_source(filename: str):
+    global _RECORDER_SOURCES_CACHE
+    sources = get_recorder_sources()
+    clean_fn = os.path.basename(filename.replace('\\', '/'))
+    if clean_fn in sources:
+        sources.pop(clean_fn, None)
+        _RECORDER_SOURCES_CACHE = sources
+        try:
+            with open(RECORDER_SOURCES_FILE, "w", encoding="utf-8") as f:
+                json.dump(sources, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
 
 # In-memory notes cache with mtime and TTL validation
 _NOTES_CACHE: Optional[List[Dict[str, Any]]] = None

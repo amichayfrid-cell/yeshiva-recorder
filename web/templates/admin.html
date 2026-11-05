@@ -10,7 +10,7 @@
 
     <title>מערכת מיון שיעורי הישיבה - ישיבת מצפה רמון</title>
 
-    <link rel="stylesheet" href="/static/style.css?v=3.3">
+    <link rel="stylesheet" href="/static/style.css?v=3.5">
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
 
@@ -89,9 +89,20 @@
                 <div class="breadcrumbs" id="pending-breadcrumbs">
                     <!-- Breadcrumbs -->
                 </div>
-                <button class="btn btn-sm btn-outline btn-close-folder" id="btn-close-folder" onclick="selectPendingFolder(null)" title="סגור הכל">
-                    ✕ סגור הכל
-                </button>
+                <div class="folder-bar-actions">
+                    <div class="sort-toggle-group">
+                        <span class="sort-label">סדר הצגה:</span>
+                        <button type="button" class="sort-btn active" id="sort-newest-btn" onclick="setSortOrder('newest')" title="השיעורים המאוחרים ביותר יופיעו בראש הרשימה">
+                            ⚡ הכי חדש
+                        </button>
+                        <button type="button" class="sort-btn" id="sort-oldest-btn" onclick="setSortOrder('oldest')" title="השיעורים המוקדמים ביותר יופיעו בראש הרשימה">
+                            ⏳ הכי ישן
+                        </button>
+                    </div>
+                    <button class="btn btn-sm btn-outline btn-close-folder" id="btn-close-folder" onclick="selectPendingFolder(null)" title="סגור הכל וחזור לרשימת התיקיות">
+                        ✕ סגור הכל
+                    </button>
+                </div>
             </div>
 
             <div id="lessons-list" class="lessons-grid">
@@ -340,7 +351,7 @@
 
     <script src="/static/security_guard.js"></script>
 
-    <script src="/static/app.js?v=3.6"></script>
+    <script src="/static/app.js?v=3.8"></script>
 
 </body>
 

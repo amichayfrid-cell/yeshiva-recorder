@@ -137,11 +137,113 @@ def verify_audio_integrity(filepath: Path, expected_size: int) -> bool:
     except Exception:
         return False
 
+def get_drive_label(drive_path: Path) -> str:
+    """
+    Detects the custom name/label of a USB recorder drive.
+    Checks:
+    1. Root identification files on the USB drive (e.g. 'recorder.txt', 'id.txt', 'מקלט 4.txt', etc.)
+    2. Linux filesystem volume label (via findmnt, lsblk, blkid, or /dev/disk/by-label)
+    3. Windows filesystem volume label
+    4. Mount point directory name
+    Normalizes names like 'RECORDER_4', 'MIKLET 4', '4' -> 'מקלט 4'.
+    Returns cleaned label (e.g. 'מקלט 4') or fallback 'מקלט שמע'.
+    """
+    from web import storage
+
+    # 1. Check for identifier files on the root of the USB drive
+    try:
+        if drive_path.exists() and drive_path.is_dir():
+            # Check for files like 'מקלט 4.txt', 'מקלט4.txt', 'recorder_4.txt'
+            for item in drive_path.iterdir():
+                if item.is_file():
+                    name_lower = item.name.lower()
+                    if name_lower.endswith((".txt", ".ini", ".id")):
+                        base_stem = item.stem
+                        normalized = storage.normalize_recorder_label(base_stem)
+                        if normalized:
+                            return normalized
+
+            # Check content of standard id files (e.g. recorder.txt)
+            for id_filename in ["recorder.txt", "id.txt", "name.txt", "label.txt", "מקלט.txt", "device.txt"]:
+                id_file = drive_path / id_filename
+                if id_file.exists() and id_file.is_file():
+                    try:
+                        content = id_file.read_text(encoding="utf-8", errors="ignore").strip()
+                        if not content:
+                            content = id_file.read_text(encoding="cp1255", errors="ignore").strip()
+                        if content:
+                            first_line = content.splitlines()[0].strip()
+                            normalized = storage.normalize_recorder_label(first_line)
+                            if normalized:
+                                return normalized
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+    # 2. Linux volume label check
+    if not sys.platform.startswith("win"):
+        try:
+            dev_res = subprocess.run(["findmnt", "-n", "-o", "SOURCE", str(drive_path)], capture_output=True, text=True, timeout=2)
+            dev_source = dev_res.stdout.strip()
+            if dev_source and dev_source.startswith("/dev/"):
+                lbl_res = subprocess.run(["lsblk", "-no", "LABEL", dev_source], capture_output=True, text=True, timeout=2)
+                raw_lbl = lbl_res.stdout.strip()
+                if raw_lbl:
+                    normalized = storage.normalize_recorder_label(raw_lbl)
+                    if normalized:
+                        return normalized
+
+                blkid_res = subprocess.run(["blkid", "-s", "LABEL", "-o", "value", dev_source], capture_output=True, text=True, timeout=2)
+                raw_blkid = blkid_res.stdout.strip()
+                if raw_blkid:
+                    normalized = storage.normalize_recorder_label(raw_blkid)
+                    if normalized:
+                        return normalized
+
+            by_label_dir = Path("/dev/disk/by-label")
+            if by_label_dir.exists() and dev_source:
+                for link in by_label_dir.iterdir():
+                    try:
+                        if link.resolve() == Path(dev_source).resolve():
+                            decoded_name = link.name.encode('utf-8').decode('unicode_escape')
+                            normalized = storage.normalize_recorder_label(decoded_name)
+                            if normalized:
+                                return normalized
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # 3. Windows volume label check
+    if sys.platform.startswith("win"):
+        try:
+            drive_letter = str(drive_path)[:2]
+            if drive_letter.endswith(":"):
+                vol_res = subprocess.run(["cmd", "/c", f"vol {drive_letter}"], capture_output=True, text=True, timeout=2)
+                for line in vol_res.stdout.splitlines():
+                    if "Volume in drive" in line and "is" in line:
+                        raw = line.split("is")[-1].strip()
+                        normalized = storage.normalize_recorder_label(raw)
+                        if normalized:
+                            return normalized
+        except Exception:
+            pass
+
+    # 4. Check mount point name itself
+    mount_name = drive_path.name
+    normalized_mount = storage.normalize_recorder_label(mount_name)
+    if normalized_mount:
+        return normalized_mount
+
+    return "מקלט שמע"
+
 def copy_and_verify_from_usb(
     source_file: Path,
     target_dir: Path = config.INCOMING_DIR,
     delete_source: bool = config.USB_DELETE_AFTER_INGEST,
-    target_name: Optional[str] = None
+    target_name: Optional[str] = None,
+    recorder_name: Optional[str] = None
 ) -> Optional[Path]:
     """
     Safely copies an audio file from a USB device into target_dir using atomic staging:
@@ -217,6 +319,25 @@ def copy_and_verify_from_usb(
         copy_successful = True
         print(f"[USB Ingest] ✓ 100% Verified on disk: {unique_target.name}")
 
+        # Store recorder source mapping and embed in ID3
+        if recorder_name:
+            try:
+                from web import storage
+                storage.set_recorder_source(unique_target.name, recorder_name)
+            except Exception:
+                pass
+            if unique_target.suffix.lower() == ".mp3":
+                try:
+                    from mutagen.mp3 import MP3
+                    from mutagen.id3 import TXXX
+                    audio = MP3(str(unique_target))
+                    if audio.tags is None:
+                        audio.add_tags()
+                    audio.tags.add(TXXX(encoding=3, desc="recorder", text=[recorder_name]))
+                    audio.save()
+                except Exception:
+                    pass
+
         # Delete source ONLY after verified copy
         if delete_source:
             try:
@@ -247,17 +368,20 @@ def copy_and_verify_from_usb(
 def scan_and_ingest_path(
     drive_path: Path,
     target_dir: Path = config.INCOMING_DIR,
-    delete_source: bool = config.USB_DELETE_AFTER_INGEST
+    delete_source: bool = config.USB_DELETE_AFTER_INGEST,
+    recorder_name: Optional[str] = None
 ) -> List[Path]:
     """
     Scans a given directory or USB drive recursively for audio recordings and ingests them.
+    Automatically detects the recorder's specific name (e.g. 'מקלט 4') and attaches it to all files.
     """
     ingested_files = []
     if not drive_path.exists():
         print(f"[USB Ingest] Path does not exist: {drive_path}")
         return ingested_files
 
-    print(f"\n[USB Ingest] Scanning drive/folder: {drive_path}...")
+    rec_label = recorder_name or get_drive_label(drive_path)
+    print(f"\n[USB Ingest] Scanning drive/folder: {drive_path} (🎙️ {rec_label})...")
     for root, _, files in os.walk(drive_path):
         for file in files:
             ext = Path(file).suffix.lower()
@@ -268,11 +392,17 @@ def scan_and_ingest_path(
                     continue
                 
                 clean_name = decode_hebrew_filename(file)
-                res = copy_and_verify_from_usb(file_path, target_dir, delete_source, target_name=clean_name)
+                res = copy_and_verify_from_usb(
+                    file_path, 
+                    target_dir, 
+                    delete_source, 
+                    target_name=clean_name,
+                    recorder_name=rec_label
+                )
                 if res:
                     ingested_files.append(res)
 
-    print(f"[USB Ingest] Ingestion complete: {len(ingested_files)} file(s) ingested from {drive_path.name}.")
+    print(f"[USB Ingest] Ingestion complete: {len(ingested_files)} file(s) ingested from {drive_path.name} ({rec_label}).")
     return ingested_files
 
 def start_usb_daemon(

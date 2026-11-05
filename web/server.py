@@ -510,6 +510,12 @@ def list_pending_lessons(request: Request):
                 file_dt = datetime.fromtimestamp(st.st_mtime)
                 hebrew_date = get_hebrew_date_str(file_dt)
                 notes = notes_by_filename.get(f.name, [])
+
+                custom_label = source_label
+                if source_key == "recorder":
+                    rec = storage.get_recorder_source(f.name, filepath=f)
+                    if rec:
+                        custom_label = rec
                 
                 lessons.append({
                     "filename": f.name,
@@ -521,7 +527,7 @@ def list_pending_lessons(request: Request):
                     "hebrew_date": hebrew_date,
                     "notes": notes,
                     "source": source_key,
-                    "source_label": source_label,
+                    "source_label": custom_label,
                     "source_badge_class": source_badge_class
                 })
             except Exception:
@@ -541,6 +547,20 @@ def list_pending_lessons(request: Request):
     _PENDING_LESSONS_CACHE_TIME = now_ts
 
     return JSONResponse(result_payload)
+
+@app.post("/api/lessons/set_recorder_source")
+def set_recorder_source(request: Request, filename: str = Form(...), recorder_label: str = Form(...)):
+    if not is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    clean_fn = os.path.basename(filename.replace('\\', '/'))
+    clean_label = storage.normalize_recorder_label(recorder_label) or recorder_label.strip()
+    if not clean_label:
+        clean_label = "מקלט שמע"
+
+    storage.set_recorder_source(clean_fn, clean_label)
+    invalidate_pending_lessons_cache()
+    return JSONResponse({"status": "success", "filename": clean_fn, "recorder_label": clean_label})
 
 @app.get("/api/audio/stream")
 def stream_audio(request: Request, filename: str = Query(...), source_path: Optional[str] = Query(None)):
@@ -645,6 +665,8 @@ def classify_lesson(
     for note in storage.get_notes_for_file(filename):
         storage.update_note_status(note["id"], "resolved")
 
+    if hasattr(storage, "remove_recorder_source"):
+        storage.remove_recorder_source(filename)
     invalidate_pending_lessons_cache()
     if hasattr(storage, "invalidate_notes_cache"):
         storage.invalidate_notes_cache()
@@ -993,6 +1015,8 @@ def delete_lesson(
         for note in storage.get_notes_for_file(clean_fn):
             storage.update_note_status(note["id"], "resolved")
 
+        if hasattr(storage, "remove_recorder_source"):
+            storage.remove_recorder_source(clean_fn)
         invalidate_pending_lessons_cache()
         if hasattr(storage, "invalidate_notes_cache"):
             storage.invalidate_notes_cache()

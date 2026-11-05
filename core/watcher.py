@@ -107,12 +107,23 @@ def process_single_audio_file(filepath: Path) -> Path:
     target_label = "🏢 Central File Server (mdserver)" if is_network else "💾 Local Staging Buffer"
     print(f"[Pipeline] Destination: {target_label} -> {unique_target_path.name}")
 
+    # Check source recorder label
+    recorder_source = None
+    try:
+        from web import storage
+        recorder_source = storage.get_recorder_source(original_name, filepath=filepath)
+    except Exception:
+        pass
+    if recorder_source:
+        print(f"[Pipeline] 🎙️ Recorder identified: {recorder_source}")
+
     # Embed initial ID3 tags before move
     metadata = {
         "rabbi": None,
         "topic": None,
         "status": "needs_review",
-        "recorded_at": file_dt.isoformat()
+        "recorded_at": file_dt.isoformat(),
+        "recorder": recorder_source
     }
     try:
         apply_id3_tags(
@@ -125,6 +136,25 @@ def process_single_audio_file(filepath: Path) -> Path:
 
     # Verified safe move (SHA-256 match before local delete)
     final_path = safe_move(str(filepath), unique_target_path)
+
+    # Carry over recorder source mapping to the new renamed file
+    if recorder_source:
+        try:
+            from web import storage
+            storage.set_recorder_source(final_path.name, recorder_source)
+        except Exception:
+            pass
+        if final_path.suffix.lower() == ".mp3":
+            try:
+                from mutagen.mp3 import MP3
+                from mutagen.id3 import TXXX
+                audio = MP3(str(final_path))
+                if audio.tags is None:
+                    audio.add_tags()
+                audio.tags.add(TXXX(encoding=3, desc="recorder", text=[recorder_source]))
+                audio.save()
+            except Exception:
+                pass
 
     # Record history
     duration_sec = round(time.time() - start_time, 2)

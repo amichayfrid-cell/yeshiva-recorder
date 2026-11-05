@@ -339,6 +339,56 @@ body {
 }
 
 
+.folder-bar-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.sort-toggle-group {
+    display: inline-flex;
+    align-items: center;
+    background: #e2e8f0;
+    padding: 3px;
+    border-radius: 8px;
+    gap: 2px;
+}
+
+.sort-toggle-group .sort-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #475569;
+    padding: 0 0.5rem 0 0.25rem;
+    user-select: none;
+}
+
+.sort-btn {
+    border: none;
+    background: transparent;
+    color: #64748b;
+    font-family: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.sort-btn:hover {
+    color: var(--text-main);
+}
+
+.sort-btn.active {
+    background: #ffffff;
+    color: var(--primary);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
 .btn-close-folder {
     display: inline-flex;
     align-items: center;

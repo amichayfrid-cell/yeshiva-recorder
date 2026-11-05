@@ -124,6 +124,18 @@ def apply_id3_tags(
             audio["album"] = [f"שיעורי תורה - {clean_date}"]
 
         audio.save()
+
+        recorder = metadata.get("recorder")
+        if recorder:
+            try:
+                from mutagen.id3 import TXXX
+                mp3_raw = MP3(file_str)
+                if mp3_raw.tags is not None:
+                    mp3_raw.tags.add(TXXX(encoding=3, desc="recorder", text=[recorder]))
+                    mp3_raw.save()
+            except Exception:
+                pass
+
         print(f"[ID3] ✓ Tags applied to {filepath.name}: Artist='{rabbi}', Title='{topic}'")
         return True
     except Exception as e:

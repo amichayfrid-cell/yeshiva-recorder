@@ -7,6 +7,7 @@ let currentFolderData = null;
 let currentAudio = null;
 let currentPlayBtn = null;
 let highlightedFolderIndex = 0;
+let currentSortOrder = localStorage.getItem("yeshiva_sort_order") || "newest";
 
 // Initialization
 document.addEventListener("DOMContentLoaded", () => {
@@ -15,6 +16,7 @@ document.addEventListener("DOMContentLoaded", () => {
     setupKeyboardListeners();
     makeModalDraggable("folder-modal");
     makeModalDraggable("edit-lesson-modal");
+    syncSortOrderUI();
 });
 
 // ==========================================
@@ -114,6 +116,40 @@ function switchTab(tab) {
     document.getElementById("tab-notes-btn").classList.toggle("active", tab === "notes");
 }
 
+// ==========================================
+// Sorting Mechanism (Newest vs Oldest)
+// ==========================================
+function sortPendingLessons() {
+    pendingLessons.sort((a, b) => {
+        const timeA = (a.mtime && a.mtime > 0) ? a.mtime : 0;
+        const timeB = (b.mtime && b.mtime > 0) ? b.mtime : 0;
+        if (timeA !== timeB) {
+            return currentSortOrder === "oldest" ? (timeA - timeB) : (timeB - timeA);
+        }
+        return currentSortOrder === "oldest" 
+            ? a.filename.localeCompare(b.filename)
+            : b.filename.localeCompare(a.filename);
+    });
+}
+
+function setSortOrder(order) {
+    currentSortOrder = order;
+    try {
+        localStorage.setItem("yeshiva_sort_order", order);
+    } catch (e) {}
+
+    syncSortOrderUI();
+    sortPendingLessons();
+    renderPendingLessons();
+}
+
+function syncSortOrderUI() {
+    const btnNewest = document.getElementById("sort-newest-btn");
+    const btnOldest = document.getElementById("sort-oldest-btn");
+    if (btnNewest) btnNewest.classList.toggle("active", currentSortOrder === "newest");
+    if (btnOldest) btnOldest.classList.toggle("active", currentSortOrder === "oldest");
+}
+
 // Fetch Pending Lessons
 async function loadPendingLessons() {
     const listContainer = document.getElementById("lessons-list");
@@ -128,6 +164,7 @@ async function loadPendingLessons() {
         }
         const data = await res.json();
         pendingLessons = data.lessons || [];
+        sortPendingLessons();
 
         document.getElementById("pending-count").innerText = pendingLessons.length;
         renderPendingFolders();
@@ -189,6 +226,7 @@ function selectPendingFolder(source) {
 }
 
 function renderFolderBar(uploadCount, recorderCount) {
+    syncSortOrderUI();
     const folderBar = document.getElementById("current-folder-bar");
     const breadcrumbs = document.getElementById("pending-breadcrumbs");
     const btnClose = document.getElementById("btn-close-folder") || document.getElementById("btn-show-all-folders");
@@ -250,6 +288,17 @@ function renderPendingLessons() {
 
     let filtered = pendingLessons.filter(l => currentPendingSource === 'upload' ? l.source === 'upload' : l.source !== 'upload');
 
+    filtered.sort((a, b) => {
+        const timeA = (a.mtime && a.mtime > 0) ? a.mtime : 0;
+        const timeB = (b.mtime && b.mtime > 0) ? b.mtime : 0;
+        if (timeA !== timeB) {
+            return currentSortOrder === "oldest" ? (timeA - timeB) : (timeB - timeA);
+        }
+        return currentSortOrder === "oldest" 
+            ? a.filename.localeCompare(b.filename)
+            : b.filename.localeCompare(a.filename);
+    });
+
     if (filtered.length === 0) {
         const folderTitle = currentPendingSource === 'upload' ? 'העלאת שיעורים' : 'שיעורים למיון (מקלט שמע)';
         listContainer.innerHTML = `
@@ -282,7 +331,7 @@ function renderPendingLessons() {
 
         const sourceBadge = lesson.source === 'upload'
             ? `<span class="badge badge-source-upload" title="שיעור שהועלה לתיקיית העלאת שיעורים">📤 העלאת שיעורים</span>`
-            : `<span class="badge badge-source-recorder" title="שיעור שנקלט ישירות ממקלט שמע (USB)">🎙️ מקלט שמע</span>`;
+            : `<span class="badge badge-source-recorder" title="לחץ לשינוי שם המקלט (למשל: מקלט 4)" onclick="editRecorderName('${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}', '${escapeHtml(lesson.source_label || "מקלט שמע")}')" style="cursor: pointer; user-select: none;">🎙️ ${escapeHtml(lesson.source_label || "מקלט שמע")}</span>`;
 
         return `
             <div class="lesson-card" id="card-${index}">
@@ -1232,6 +1281,30 @@ function escapeHtml(str) {
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
+}
+
+// Edit Recorder Name directly from badge
+async function editRecorderName(encodedFilename, currentLabel) {
+    const filename = decodeURIComponent(encodedFilename);
+    const newName = prompt("הזן שם עבור מקלט זה (למשל: מקלט 4, מקלט א, בית מדרש):", currentLabel || "מקלט שמע");
+    if (!newName || newName.trim() === "" || newName.trim() === currentLabel) return;
+
+    try {
+        const form = new FormData();
+        form.append("filename", filename);
+        form.append("recorder_label", newName.trim());
+        const res = await fetch("/api/lessons/set_recorder_source", { method: "POST", body: form });
+        const data = await res.json();
+        if (data.status === "success") {
+            const lesson = pendingLessons.find(l => l.filename === filename);
+            if (lesson) {
+                lesson.source_label = data.recorder_label;
+                renderPendingLessons();
+            }
+        }
+    } catch (e) {
+        alert("שגיאה בעדכון שם המקלט: " + e.message);
+    }
 }
 
 // Delete Lesson with active confirmation
