@@ -21,9 +21,14 @@ SUPPORTED_EXTENSIONS = config.USB_AUDIO_EXTENSIONS
 def is_file_ready(filepath: Path, wait_seconds: float = 1.0) -> bool:
     """
     Checks if a file has finished being copied/written by comparing its size over time.
+    Strictly ignores hidden files and temporary .part files.
     """
+    if filepath.name.startswith(".") or filepath.name.endswith(".part"):
+        return False
     try:
         size1 = filepath.stat().st_size
+        if size1 <= 0:
+            return False
         time.sleep(wait_seconds)
         size2 = filepath.stat().st_size
         return size1 == size2 and size1 > 0
@@ -43,10 +48,12 @@ def get_file_timestamp(filepath: Path) -> datetime:
 def generate_timestamp_filename(file_dt: datetime, original_extension: str = ".mp3") -> str:
     """
     Generates filename strictly in Hebrew date + time format without Gregorian date.
-    Format: '(תאריך עברי) HH-MM.ext'
-    Example: '(ח חשוון תשפו) 08-45.mp3'
+    Format: '(תאריך עברי) HH.MM.ext'
+    Example: '(ח חשוון תשפו) 19.30.mp3'
+    Uses period (.) separator between two-digit hour and minute to ensure valid Windows/SMB filenames
+    and prevent RTL reversal (never flips to 30_19).
     """
-    time_str = file_dt.strftime("%H-%M")
+    time_str = file_dt.strftime("%H.%M")
     hebrew_date = get_hebrew_date_str(file_dt)
     return f"({hebrew_date}) {time_str}{original_extension}"
 
@@ -91,7 +98,7 @@ def process_single_audio_file(filepath: Path) -> Path:
     print(f"[Pipeline] Processing file: {original_name}")
     print(f"[Pipeline] Original recording time: {file_dt.strftime('%H:%M')} ({hebrew_date_str})")
 
-    # Generate filename: '(תאריך עברי) HH-MM.mp3'
+    # Generate filename: '(תאריך עברי) HH.MM.mp3'
     target_filename = generate_timestamp_filename(file_dt, original_extension=ext)
     target_dir = config.get_final_target_dir()
     unique_target_path = get_unique_filepath(target_dir, target_filename)
@@ -136,6 +143,29 @@ def process_single_audio_file(filepath: Path) -> Path:
     print("=" * 60)
     return final_path
 
+def cleanup_incomplete_transfers() -> int:
+    """
+    Cleans up any orphaned temporary staging files (.part files) from interrupted transfers.
+    """
+    cleaned = 0
+    for directory in [config.INCOMING_DIR, config.LOCAL_STAGING_DIR]:
+        if not directory.exists():
+            continue
+        try:
+            for item in directory.iterdir():
+                if item.is_file() and (item.name.startswith(".part_") or item.name.endswith(".part")):
+                    try:
+                        if (time.time() - item.stat().st_mtime) > 20:
+                            item.unlink(missing_ok=True)
+                            cleaned += 1
+                    except OSError:
+                        pass
+        except Exception:
+            pass
+    if cleaned > 0:
+        print(f"[Cleanup] Removed {cleaned} orphaned temporary .part transfer file(s).")
+    return cleaned
+
 def process_inbox() -> List[Path]:
     """
     Scans incoming/ once and processes all available audio files.
@@ -150,6 +180,8 @@ def process_inbox() -> List[Path]:
         return processed_files
 
     for file_path in config.INCOMING_DIR.iterdir():
+        if file_path.name.startswith(".") or file_path.name.endswith(".part"):
+            continue
         if file_path.is_file() and file_path.suffix.lower() in SUPPORTED_EXTENSIONS:
             if is_file_ready(file_path):
                 res = process_single_audio_file(file_path)
@@ -170,6 +202,7 @@ def start_watching(poll_interval: float = 2.0) -> None:
 
     # Initial cleanup
     cleanup_temp_files()
+    cleanup_incomplete_transfers()
 
     # Start automatic USB ingestion daemon in background thread
     usb_thread = threading.Thread(target=start_usb_daemon, daemon=True)

@@ -435,13 +435,12 @@ body {
 
 
 .card-title {
-
     font-size: 1.15rem;
-
     font-weight: 600;
-
     color: var(--text-main);
-
+    direction: ltr;
+    unicode-bidi: isolate;
+    display: inline-block;
 }
 
 
@@ -1506,3 +1505,386 @@ body {
 
 }
 
+
+
+/* ==========================================================================
+   Modern Explorer Modal & Existing Lessons List Styling
+   ========================================================================== */
+.breadcrumbs-bar {
+    background: #f8fafc !important;
+    padding: 0.75rem 1.25rem !important;
+    border-bottom: 1px solid var(--border) !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 0.45rem !important;
+    font-size: 0.85rem !important;
+    flex-wrap: wrap !important;
+}
+
+.crumb-btn {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 0.35rem !important;
+    padding: 0.4rem 0.75rem !important;
+    border-radius: 8px !important;
+    border: 1px solid #cbd5e1 !important;
+    background: #ffffff !important;
+    color: #1e3a8a !important;
+    font-family: inherit !important;
+    font-size: 0.86rem !important;
+    font-weight: 500 !important;
+    cursor: pointer !important;
+    transition: all 0.15s ease !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04) !important;
+    user-select: none !important;
+}
+
+.crumb-btn:hover {
+    background: #eff6ff !important;
+    border-color: #3b82f6 !important;
+    color: #1d4ed8 !important;
+    transform: translateY(-1px) !important;
+}
+
+.crumb-btn.active-crumb {
+    background: #eff6ff !important;
+    border-color: #93c5fd !important;
+    color: #1e40af !important;
+    font-weight: 700 !important;
+    cursor: default !important;
+    box-shadow: none !important;
+    transform: none !important;
+}
+
+.crumb-separator {
+    color: #94a3b8 !important;
+    font-size: 0.75rem !important;
+    font-weight: bold !important;
+    user-select: none !important;
+}
+
+.btn-crumb-up {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 0.35rem !important;
+    padding: 0.4rem 0.75rem !important;
+    border-radius: 8px !important;
+    border: 1px solid #bfdbfe !important;
+    background: #dbeafe !important;
+    color: #1e40af !important;
+    font-family: inherit !important;
+    font-size: 0.86rem !important;
+    font-weight: 600 !important;
+    cursor: pointer !important;
+    transition: all 0.15s ease !important;
+    box-shadow: 0 1px 2px rgba(59, 130, 246, 0.08) !important;
+}
+
+.btn-crumb-up:hover {
+    background: #bfdbfe !important;
+    color: #172554 !important;
+    transform: translateY(-1px) !important;
+}
+
+/* Existing Lessons Panel in Explorer Modal */
+.existing-lessons-panel {
+    margin: 0.5rem 0 1rem 0;
+    padding: 0.85rem 1rem;
+    background: #f8fafc;
+    border-radius: 12px;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+
+.existing-lessons-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.65rem;
+    padding-bottom: 0.45rem;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.existing-lessons-title {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: #1e3a8a;
+}
+
+.existing-lessons-badge {
+    background: #dbeafe;
+    color: #1e40af;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 0.2rem 0.65rem;
+    border-radius: 9999px;
+    border: 1px solid #bfdbfe;
+}
+
+.existing-lessons-list {
+    max-height: 220px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    padding-left: 2px;
+}
+
+.existing-lesson-item {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 0.55rem 0.85rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    transition: all 0.15s ease;
+}
+
+.existing-lesson-item:hover {
+    border-color: #93c5fd;
+    background: #f0f7ff;
+    box-shadow: 0 2px 6px rgba(59, 130, 246, 0.08);
+}
+
+.existing-lesson-main {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    min-width: 0;
+    flex: 1;
+}
+
+.existing-lesson-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: #eff6ff;
+    color: #2563eb;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.95rem;
+    flex-shrink: 0;
+}
+
+.existing-lesson-info {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.existing-lesson-name {
+    font-weight: 600;
+    font-size: 0.88rem;
+    color: #1e293b;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.35;
+}
+
+.existing-lesson-ext {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #64748b;
+    background: #f1f5f9;
+    padding: 1px 6px;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+
+.btn-preview-audio {
+    padding: 0.35rem 0.85rem;
+    border-radius: 6px;
+    border: 1px solid #bfdbfe;
+    background: #eff6ff;
+    color: #1d4ed8;
+    font-family: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-shrink: 0;
+}
+
+.btn-preview-audio:hover {
+    background: #dbeafe;
+    border-color: #3b82f6;
+    color: #1e40af;
+}
+
+.btn-preview-audio.playing {
+    background: #fee2e2;
+    border-color: #fca5a5;
+    color: #b91c1c;
+}
+
+
+/* Modal Folder Search Bar & Results */
+.modal-search-bar {
+    padding: 0.65rem 1.5rem;
+    background: #ffffff;
+    border-bottom: 1px solid var(--border);
+}
+
+.search-input-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 100%;
+}
+
+.modal-search-input {
+    width: 100%;
+    padding: 0.55rem 2.4rem 0.55rem 2.2rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 0.9rem;
+    background: #f8fafc;
+    transition: all 0.2s ease;
+    box-sizing: border-box;
+    color: var(--text-main);
+}
+
+.modal-search-input:focus {
+    outline: none;
+    background: #ffffff;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.search-input-wrapper .search-icon {
+    position: absolute;
+    right: 0.85rem;
+    color: var(--text-muted);
+    font-size: 0.95rem;
+    pointer-events: none;
+}
+
+.btn-clear-search {
+    position: absolute;
+    left: 0.65rem;
+    background: #e2e8f0;
+    border: none;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    transition: all 0.15s;
+}
+
+.btn-clear-search:hover {
+    background: #cbd5e1;
+    color: var(--text-main);
+}
+
+.search-results-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.25rem 0.2rem 0.6rem 0.2rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.search-result-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.65rem 0.9rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #ffffff;
+    cursor: pointer;
+    transition: all 0.15s;
+    margin-bottom: 0.4rem;
+}
+
+.search-result-row:hover, .search-result-row.highlighted {
+    background: #eff6ff;
+    border-color: var(--primary-light);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-sm);
+}
+
+.search-result-main {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    min-width: 0;
+    flex: 1;
+}
+
+.search-result-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: var(--text-main);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.search-result-path {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    direction: rtl;
+}
+
+.search-result-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-shrink: 0;
+    margin-right: 0.75rem;
+}
+
+.btn-select-search-result {
+    padding: 5px 12px;
+    font-size: 0.8rem;
+    background: #2563eb;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background 0.15s;
+}
+
+.btn-select-search-result:hover {
+    background: #1d4ed8;
+}
+
+.btn-enter-search-result {
+    padding: 5px 10px;
+    font-size: 0.8rem;
+    background: #f1f5f9;
+    color: var(--text-main);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.btn-enter-search-result:hover {
+    background: #e2e8f0;
+}

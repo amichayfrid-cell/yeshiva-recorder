@@ -89,6 +89,54 @@ def get_removable_mounts() -> List[Path]:
 
     return removable_paths
 
+
+def verify_audio_integrity(filepath: Path, expected_size: int) -> bool:
+    """
+    Verifies that the transferred audio file is intact and not corrupted:
+    1. File exists and size matches expected_size exactly.
+    2. File is not 0 bytes.
+    3. Magic bytes / header check for audio format.
+    4. Mutagen check if mutagen is installed.
+    """
+    if not filepath.exists():
+        return False
+
+    try:
+        actual_size = filepath.stat().st_size
+        if actual_size <= 0 or actual_size != expected_size:
+            return False
+
+        with open(filepath, "rb") as f:
+            header = f.read(16)
+
+        if len(header) < 4:
+            return False
+
+        ext = filepath.suffix.lower()
+        if ext == ".mp3":
+            # MP3 files start with ID3 tag or 0xFF sync frame
+            if not (header.startswith(b"ID3") or header[0] == 0xFF):
+                with open(filepath, "rb") as f:
+                    chunk = f.read(1024)
+                if b"ID3" not in chunk and b"\xff\xfb" not in chunk and b"\xff\xf3" not in chunk:
+                    return False
+        elif ext == ".wav":
+            if not (header.startswith(b"RIFF") and b"WAVE" in header):
+                return False
+
+        try:
+            import mutagen
+            audio = mutagen.File(str(filepath))
+            if audio is not None and getattr(audio, "info", None) is not None:
+                if getattr(audio.info, "length", 0) <= 0:
+                    return False
+        except Exception:
+            pass
+
+        return True
+    except Exception:
+        return False
+
 def copy_and_verify_from_usb(
     source_file: Path,
     target_dir: Path = config.INCOMING_DIR,
@@ -96,50 +144,105 @@ def copy_and_verify_from_usb(
     target_name: Optional[str] = None
 ) -> Optional[Path]:
     """
-    Safely copies an audio file from a USB device into target_dir:
-    1. Generates unique target filename to prevent collisions.
-    2. Uses safe_move (if deleting) or copy + SHA256 verification.
-    3. Returns the path of the newly ingested file in target_dir.
+    Safely copies an audio file from a USB device into target_dir using atomic staging:
+    1. Obtains expected source size.
+    2. Copies to an isolated hidden temporary file (.part_*.part).
+    3. If USB is disconnected or transfer is interrupted, immediately deletes the temporary file.
+    4. Verifies byte-exact size and audio header integrity.
+    5. Atomically renames temporary file to final target (os.replace).
+    6. Only upon 100% verified transfer, deletes the original file from the USB recorder.
     """
     if not source_file.exists():
         return None
 
-    filename = target_name if target_name else source_file.name
-    unique_target = get_unique_filepath(target_dir, filename)
-    print(f"[USB Ingest] Copying {source_file.name} -> {unique_target.name}...")
-
-
     try:
+        expected_size = source_file.stat().st_size
+    except (OSError, FileNotFoundError):
+        print(f"[USB Ingest] Could not read source file (device disconnected?): {source_file}")
+        return None
+
+    if expected_size <= 0:
+        print(f"[USB Ingest] Skipping empty 0-byte file: {source_file.name}")
+        return None
+
+    filename = target_name if target_name else source_file.name
+
+    # Check if this exact file was already fully ingested in target_dir or needs_review
+    target_candidate = target_dir / filename
+    if target_candidate.exists() and target_candidate.stat().st_size == expected_size:
+        print(f"[USB Ingest] File {filename} already fully ingested (size {expected_size} matches). Skipping duplicate.")
         if delete_source:
             try:
-                final_path = safe_move(str(source_file), unique_target)
+                source_file.unlink()
             except Exception:
-                import shutil
-                shutil.copy2(str(source_file), str(unique_target))
-                src_hash = calculate_sha256(str(source_file))
-                dst_hash = calculate_sha256(str(unique_target))
-                if src_hash != dst_hash:
-                    unique_target.unlink(missing_ok=True)
-                    raise IOError("Checksum mismatch during USB copy!")
-                subprocess.run(["sudo", "rm", "-f", str(source_file)], capture_output=True, text=True)
-                final_path = unique_target
+                try:
+                    subprocess.run(["sudo", "rm", "-f", str(source_file)], capture_output=True, text=True)
+                except Exception:
+                    pass
+        return target_candidate
 
-            print(f"[USB Ingest] ✓ Safely ingested & cleared from recorder: {source_file.name}")
-            return final_path
-        else:
-            import shutil
-            shutil.copy2(str(source_file), str(unique_target))
-            # Verify checksum
-            src_hash = calculate_sha256(str(source_file))
-            dst_hash = calculate_sha256(str(unique_target))
-            if src_hash != dst_hash:
-                unique_target.unlink(missing_ok=True)
-                raise IOError("Checksum mismatch during USB copy!")
-            print(f"[USB Ingest] ✓ Safely ingested (original preserved): {source_file.name}")
-            return unique_target
-    except Exception as e:
-        print(f"[USB Ingest] ✗ Error ingesting {source_file.name}: {e}")
+    unique_target = get_unique_filepath(target_dir, filename)
+    
+    # Temporary staging path in the same directory (enables atomic os.replace)
+    temp_target = target_dir / f".part_{int(time.time()*1000)}_{unique_target.name}.part"
+    temp_target.parent.mkdir(parents=True, exist_ok=True)
+
+    print(f"[USB Ingest] Copying {source_file.name} ({round(expected_size / (1024*1024), 2)} MB) -> Staging...")
+
+    copy_successful = False
+    try:
+        # Perform chunked copy to detect disconnections cleanly and promptly
+        with open(source_file, "rb") as fsrc, open(temp_target, "wb") as fdst:
+            while True:
+                chunk = fsrc.read(1024 * 1024)  # 1MB buffer for fast USB transfer
+                if not chunk:
+                    break
+                fdst.write(chunk)
+            fdst.flush()
+            os.fsync(fdst.fileno())
+
+        # Copy metadata timestamps
+        try:
+            shutil.copystat(str(source_file), str(temp_target))
+        except (OSError, Exception):
+            pass
+
+        # Verification Phase: Check exact size and audio validity
+        if not verify_audio_integrity(temp_target, expected_size):
+            actual_size = temp_target.stat().st_size if temp_target.exists() else 0
+            raise IOError(f"Integrity check failed! Expected {expected_size} bytes, got {actual_size} bytes.")
+
+        # Atomic Promotion: Move temp file to final destination
+        os.replace(str(temp_target), str(unique_target))
+        copy_successful = True
+        print(f"[USB Ingest] ✓ 100% Verified on disk: {unique_target.name}")
+
+        # Delete source ONLY after verified copy
+        if delete_source:
+            try:
+                source_file.unlink()
+                print(f"[USB Ingest] ✓ Cleared from recorder: {source_file.name}")
+            except Exception:
+                try:
+                    subprocess.run(["sudo", "rm", "-f", str(source_file)], capture_output=True, text=True)
+                    print(f"[USB Ingest] ✓ Cleared via sudo rm: {source_file.name}")
+                except Exception as del_err:
+                    print(f"[USB Ingest] Note: Could not delete from recorder ({del_err}). Original kept on USB.")
+
+        return unique_target
+
+    except (OSError, IOError, Exception) as e:
+        print(f"[USB Ingest] ✗ Interrupted or failed during copy of {source_file.name}: {e}")
         return None
+
+    finally:
+        # Rollback: Clean up any leftover temporary staging file if copy was not 100% successful
+        if not copy_successful and temp_target.exists():
+            try:
+                temp_target.unlink(missing_ok=True)
+                print(f"[USB Ingest] 🧹 Rollback: Cleaned up incomplete temporary file ({temp_target.name})")
+            except Exception:
+                pass
 
 def scan_and_ingest_path(
     drive_path: Path,

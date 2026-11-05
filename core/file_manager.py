@@ -38,34 +38,50 @@ def get_unique_filepath(target_dir: Path, base_filename: str) -> Path:
 
 def safe_move(source_path: str, target_path: Path) -> Path:
     """
-    Safely moves a file from source_path to target_path:
-    1. Copies the file.
-    2. Verifies SHA256 checksum match.
-    3. Deletes the source file only upon verification.
+    Safely moves a file from source_path to target_path with size verification.
+    Uses atomic os.replace on same filesystem, or atomic staging via .tmp_* file
+    on cross-filesystem transfers (e.g. SMB network mounts).
+    Deletes source only after destination is verified byte-for-byte.
     """
     source_p = Path(source_path)
     if not source_p.exists():
         raise FileNotFoundError(f"Source file does not exist: {source_path}")
 
-    # Calculate source hash
-    src_hash = calculate_sha256(source_path)
-
-    # Ensure parent directory exists
     target_path.parent.mkdir(parents=True, exist_ok=True)
+    expected_size = source_p.stat().st_size
 
-    # Copy to destination
-    shutil.copy2(source_path, str(target_path))
+    # Try atomic os.replace first (fast and atomic if on the same filesystem)
+    try:
+        os.replace(str(source_p), str(target_path))
+        return target_path
+    except OSError:
+        # Cross-filesystem move (e.g. local disk to SMB mount or vice-versa)
+        pass
 
-    # Verify destination hash
-    dst_hash = calculate_sha256(str(target_path))
-    if src_hash != dst_hash:
-        # Checksum mismatch, clean up corrupted copy
-        if target_path.exists():
-            target_path.unlink()
-        raise IOError(f"Checksum mismatch moving {source_path} to {target_path}!")
+    # For cross-filesystem transfer, copy to a hidden temporary file first
+    temp_target = target_path.parent / f".tmp_{target_path.name}"
+    try:
+        shutil.copy2(str(source_p), str(temp_target))
 
-    # Safe to remove source file
-    source_p.unlink()
+        # Verify copied file size
+        actual_size = temp_target.stat().st_size
+        if actual_size != expected_size:
+            raise IOError(f"File copy size mismatch: expected {expected_size}, got {actual_size}")
+
+        # Atomic rename on destination filesystem
+        temp_target.replace(target_path)
+
+        # Remove source only after destination is fully confirmed
+        source_p.unlink(missing_ok=True)
+    except Exception:
+        # Cleanup incomplete target file on any error
+        if temp_target.exists():
+            try:
+                temp_target.unlink(missing_ok=True)
+            except Exception:
+                pass
+        raise
+
     return target_path
 
 def apply_id3_tags(

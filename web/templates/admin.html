@@ -198,7 +198,7 @@
 
                     <label>קובץ מקורי בשרת:</label>
 
-                    <div id="edit-lesson-filename-display" style="font-weight: 600; color: var(--text-main); word-break: break-all; background: #f1f5f9; padding: 0.5rem 0.75rem; border-radius: 6px; font-size: 0.85rem;"></div>
+                    <div id="edit-lesson-filename-display" style="font-weight: 600; color: var(--text-main); word-break: break-all; background: #f1f5f9; padding: 0.5rem 0.75rem; border-radius: 6px; font-size: 0.85rem; direction: ltr; unicode-bidi: isolate; text-align: right;"></div>
 
                 </div>
 
@@ -278,12 +278,32 @@
 
             </div>
 
-            <!-- Breadcrumbs Navigation Bar -->
+                        <!-- Breadcrumbs Navigation Bar -->
 
             <div id="modal-breadcrumbs" class="breadcrumbs-bar">
 
                 <!-- e.g. ראשי ❯ אלול התשפ''ו ❯ רבני הישיבה -->
 
+            </div>
+
+            <!-- Modal Folder Search Bar -->
+            <div class="modal-search-bar">
+                <div class="search-input-wrapper">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" 
+                           id="modal-folder-search-input" 
+                           class="modal-search-input" 
+                           placeholder="חיפוש תיקייה בשרת (למשל: הרב אורי, תשפ&quot;ז, עיון...)..." 
+                           oninput="handleFolderSearchInput()" 
+                           onkeydown="handleFolderSearchKeyDown(event)"
+                           autocomplete="off">
+                    <button type="button" 
+                            id="modal-search-clear-btn" 
+                            class="btn-clear-search" 
+                            onclick="clearFolderSearch()" 
+                            title="נקה חיפוש" 
+                            style="display: none;">✕</button>
+                </div>
             </div>
 
             <div class="modal-body">

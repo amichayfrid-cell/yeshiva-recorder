@@ -120,9 +120,17 @@ def list_direct_subfolders(target_path: Optional[str] = None) -> Dict[str, Any]:
     if not target_path or target_path == "":
         current_dir_str = root_str
     else:
-        current_dir_str = os.path.abspath(target_path)
-        if not current_dir_str.startswith(root_str):
-            current_dir_str = root_str
+        clean_target = str(target_path).replace("\\", "/").strip()
+        if os.path.isabs(clean_target) and clean_target.startswith(root_str):
+            current_dir_str = os.path.abspath(clean_target)
+        else:
+            rel_candidate = os.path.abspath(os.path.join(root_str, clean_target.lstrip("/")))
+            if rel_candidate.startswith(root_str) and os.path.isdir(rel_candidate):
+                current_dir_str = rel_candidate
+            elif os.path.isabs(clean_target) and os.path.isdir(clean_target):
+                current_dir_str = os.path.abspath(clean_target)
+            else:
+                current_dir_str = root_str
 
     if not os.path.isdir(current_dir_str):
         current_dir_str = root_str
@@ -135,20 +143,27 @@ def list_direct_subfolders(target_path: Optional[str] = None) -> Dict[str, Any]:
             return cached_data
 
     subfolders = []
+    audio_files = []
     ignored = {"שיעורים למיון", "incoming", "needs_review", "lost+found", "$RECYCLE.BIN", "System Volume Information"}
 
     try:
         with os.scandir(current_dir_str) as it:
             for entry in it:
                 try:
-                    if entry.is_dir(follow_symlinks=False) and not entry.name.startswith("."):
-                        if entry.name not in ignored:
+                    if entry.name.startswith("."):
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        if entry.name not in ignored and "הגברת החירות" not in entry.name:
                             rel_path = os.path.relpath(entry.path, root_str)
                             subfolders.append({
                                 "name": entry.name,
                                 "rel_path": "" if rel_path == "." else rel_path,
                                 "full_path": entry.path
                             })
+                    elif entry.is_file(follow_symlinks=False):
+                        ext = os.path.splitext(entry.name)[1].lower()
+                        if ext in [".mp3", ".wav", ".m4a", ".ogg"]:
+                            audio_files.append(entry.name)
                 except OSError:
                     continue
     except (PermissionError, OSError) as e:
@@ -171,12 +186,91 @@ def list_direct_subfolders(target_path: Optional[str] = None) -> Dict[str, Any]:
         "current_name": current_name,
         "parent_path": parent_path,
         "is_root": current_dir_str == root_str,
-        "subfolders": subfolders
+        "subfolders": subfolders,
+        "audio_files": sorted(audio_files),
+        "root_full_path": root_str
     }
 
     # Store in cache
     FOLDER_CACHE[current_dir_str] = (now, result)
     return result
+
+_ALL_FOLDERS_CACHE = None
+_ALL_FOLDERS_CACHE_TIME = 0.0
+ALL_FOLDERS_CACHE_TTL = 180.0  # 3 minutes
+
+def get_all_folders_flat() -> List[Dict[str, Any]]:
+    """
+    Crawls the root folder and builds a flat list of all navigable directories.
+    Cached in memory for high-speed search without repeated disk/SMB hits.
+    """
+    global _ALL_FOLDERS_CACHE, _ALL_FOLDERS_CACHE_TIME
+    now = time.time()
+    if _ALL_FOLDERS_CACHE is not None and (now - _ALL_FOLDERS_CACHE_TIME) < ALL_FOLDERS_CACHE_TTL:
+        return _ALL_FOLDERS_CACHE
+
+    root_str = str(config.NETWORK_MOUNT_POINT if config.is_network_share_mounted() else config.LOCAL_STAGING_DIR)
+    if not os.path.isdir(root_str):
+        return []
+
+    ignored = {"שיעורים למיון", "incoming", "needs_review", "lost+found", "$RECYCLE.BIN", "System Volume Information"}
+    folders = []
+
+    try:
+        for root, dirs, _ in os.walk(root_str):
+            # In-place filtering of ignored and hidden directories
+            dirs[:] = [
+                d for d in dirs 
+                if not d.startswith(".") 
+                and d not in ignored 
+                and "הגברת החירות" not in d
+            ]
+            
+            for d in dirs:
+                full_d = os.path.join(root, d)
+                rel_d = os.path.relpath(full_d, root_str).replace("\\", "/")
+                parts = [p for p in rel_d.split("/") if p]
+                breadcrumb = " ❯ ".join(parts)
+                folders.append({
+                    "name": d,
+                    "rel_path": rel_d,
+                    "full_path": full_d,
+                    "breadcrumb": breadcrumb
+                })
+    except Exception as e:
+        print(f"[Storage] Error crawling all folders: {e}")
+
+    _ALL_FOLDERS_CACHE = folders
+    _ALL_FOLDERS_CACHE_TIME = now
+    return folders
+
+def search_folders(query: str, limit: int = 50) -> List[Dict[str, Any]]:
+    """
+    Searches for folders matching the given query (case-insensitive Hebrew/English).
+    Prioritizes matches in folder name over path matches.
+    """
+    clean_q = query.strip().lower()
+    if not clean_q:
+        return []
+
+    all_folders = get_all_folders_flat()
+    name_matches = []
+    path_matches = []
+
+    for f in all_folders:
+        fn_lower = f["name"].lower()
+        rel_lower = f["rel_path"].lower()
+        if clean_q in fn_lower:
+            name_matches.append(f)
+        elif clean_q in rel_lower:
+            path_matches.append(f)
+
+    # Sort name matches: exact match first, then shorter name, then alphabetical
+    name_matches.sort(key=lambda x: (x["name"].lower() != clean_q, len(x["name"]), x["name"]))
+    path_matches.sort(key=lambda x: (len(x["rel_path"]), x["rel_path"]))
+
+    results = (name_matches + path_matches)[:limit]
+    return results
 
 def create_new_folder(base_folder: str, new_folder_name: str) -> str:
     """
@@ -189,6 +283,8 @@ def create_new_folder(base_folder: str, new_folder_name: str) -> str:
     target = os.path.join(base_folder, clean_name)
     os.makedirs(target, exist_ok=True)
     
-    # Invalidate cache for base folder
+    # Invalidate cache for base folder and global search cache
     FOLDER_CACHE.pop(base_folder, None)
+    global _ALL_FOLDERS_CACHE
+    _ALL_FOLDERS_CACHE = None
     return target

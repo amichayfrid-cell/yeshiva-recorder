@@ -38,6 +38,7 @@ async function loadPendingLessons() {
     try {
         const res = await fetch("/api/lessons/pending");
         if (res.status === 401) {
+            sessionStorage.removeItem("last_yeshiva_folder_path");
             window.location.href = "/login";
             return;
         }
@@ -185,12 +186,13 @@ function renderPendingLessons() {
     listContainer.innerHTML = filtered.map(lesson => {
         const index = pendingLessons.indexOf(lesson);
         const notesHtml = (lesson.notes && lesson.notes.length > 0) ? lesson.notes.map(note => `
-            <div class="student-note-banner">
+            <div class="student-note-banner" id="note-banner-${note.id}">
                 <span class="icon">🔔</span>
-                <div>
+                <div style="flex: 1; min-width: 0;">
                     <div class="note-content"><strong>הערת תלמיד:</strong> ${escapeHtml(note.description)}</div>
                     <div class="note-meta" title="${escapeHtml(note.created_at || '')}">נשלח ע"י ${escapeHtml(note.student_name)} | ${escapeHtml(formatNoteDateDisplay(note))}</div>
                 </div>
+                <button type="button" class="btn btn-outline btn-sm" onclick="resolveNote(${note.id})" style="align-self: center; margin-right: auto; padding: 4px 10px; font-size: 0.8rem; background: #ffffff; border-color: #fde047; color: #854d0e; cursor: pointer; white-space: nowrap; border-radius: 6px;" title="סמן הערה זו כטופלה">✓ סמן כטופל</button>
             </div>
         `).join("") : "";
 
@@ -204,9 +206,9 @@ function renderPendingLessons() {
                     <div class="card-title-wrap">
                         ${sourceBadge}
                         <span class="badge badge-hebrew-date">${escapeHtml(lesson.hebrew_date)}</span>
-                        <span class="badge badge-time">שעת הקלטה: ${lesson.created_time}</span>
+                        <span class="badge badge-time">שעת הקלטה: <bdi dir="ltr">${escapeHtml(lesson.created_time)}</bdi></span>
                         <span class="badge badge-time">${lesson.size_mb} MB</span>
-                        <span class="card-title">${escapeHtml(lesson.filename)}</span>
+                        <span class="card-title" dir="ltr" style="unicode-bidi: isolate;"><bdi>${escapeHtml(lesson.filename)}</bdi></span>
                     </div>
                 </div>
 
@@ -334,7 +336,84 @@ function formatTime(seconds) {
 }
 
 // --- Instant Folder Explorer with Keyboard Navigation ---
+let modalAudioInstance = null;
+let currentModalAudioBtnId = null;
+
+function getStoredFolderPath() {
+    try {
+        return sessionStorage.getItem("last_yeshiva_folder_path") || "";
+    } catch (e) {
+        return "";
+    }
+}
+
+function setStoredFolderPath(fullPath, isRoot) {
+    try {
+        if (isRoot || !fullPath) {
+            sessionStorage.setItem("last_yeshiva_folder_path", "");
+        } else {
+            sessionStorage.setItem("last_yeshiva_folder_path", fullPath);
+        }
+    } catch (e) {
+        console.warn("Storage error:", e);
+    }
+}
+
+function stopModalAudioPreview() {
+    if (modalAudioInstance) {
+        modalAudioInstance.pause();
+        modalAudioInstance = null;
+    }
+    if (currentModalAudioBtnId) {
+        const prevBtn = document.getElementById(currentModalAudioBtnId);
+        if (prevBtn) {
+            prevBtn.innerHTML = "▶ השמע";
+            prevBtn.classList.remove("playing");
+        }
+        currentModalAudioBtnId = null;
+    }
+}
+
+function toggleModalAudioPreview(encodedName, btnId) {
+    const filename = decodeURIComponent(encodedName);
+    const btn = document.getElementById(btnId);
+    if (!currentFolderData) return;
+
+    const fullPath = (currentFolderData.current_full_path || "") + "/" + filename;
+    const streamUrl = `/api/audio/stream?filename=${encodeURIComponent(filename)}&source_path=${encodeURIComponent(fullPath)}`;
+
+    if (modalAudioInstance && !modalAudioInstance.paused && currentModalAudioBtnId === btnId) {
+        stopModalAudioPreview();
+        return;
+    }
+
+    stopModalAudioPreview();
+
+    modalAudioInstance = new Audio(streamUrl);
+    currentModalAudioBtnId = btnId;
+    if (btn) {
+        btn.innerHTML = "⏸ עצור";
+        btn.classList.add("playing");
+    }
+
+    modalAudioInstance.play().catch(e => {
+        console.warn("Playback failed:", e);
+        stopModalAudioPreview();
+    });
+
+    modalAudioInstance.onended = () => {
+        stopModalAudioPreview();
+    };
+}
+
+function navigateToBreadcrumb(index) {
+    if (window.modalBreadcrumbs && window.modalBreadcrumbs[index] !== undefined) {
+        fetchFolderContent(window.modalBreadcrumbs[index].path);
+    }
+}
+
 async function fetchFolderContent(path = "") {
+    stopModalAudioPreview();
     const listContainer = document.getElementById("modal-folders-list");
     listContainer.innerHTML = `<div style="text-align:center; padding: 2rem; color: var(--text-muted);">טוען תיקייה...</div>`;
 
@@ -344,8 +423,19 @@ async function fetchFolderContent(path = "") {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ path: path || null })
         });
+        if (res.status === 401) {
+            setStoredFolderPath("", true);
+            window.location.href = "/login";
+            return;
+        }
         const data = await res.json();
+        if (data && data.subfolders) {
+            data.subfolders = data.subfolders.filter(sub => !sub.name.includes("הגברת החירות"));
+        }
         currentFolderData = data;
+        if (data) { 
+            setStoredFolderPath(data.current_full_path, data.is_root); 
+        }
         highlightedFolderIndex = 0;
         renderExplorerView();
     } catch (e) {
@@ -353,13 +443,217 @@ async function fetchFolderContent(path = "") {
     }
 }
 
+
+// ==========================================
+// Folder Modal Search Functionality
+// ==========================================
+let folderSearchTimer = null;
+let currentFolderSearchResults = null;
+let highlightedSearchResultIndex = 0;
+
+function handleFolderSearchInput() {
+    const input = document.getElementById("modal-folder-search-input");
+    const clearBtn = document.getElementById("modal-search-clear-btn");
+    if (!input) return;
+    const q = input.value.trim();
+
+    if (!q) {
+        clearFolderSearch(true);
+        return;
+    }
+
+    if (clearBtn) clearBtn.style.display = "flex";
+
+    // 1. Instant local filter if currently in a folder with subfolders
+    const currentSubfolders = (currentFolderData && currentFolderData.subfolders) ? currentFolderData.subfolders : [];
+    const localFiltered = currentSubfolders.filter(s => s.name.toLowerCase().includes(q.toLowerCase()));
+
+    renderFolderSearchResults(localFiltered, q, true);
+
+    // 2. Global search across all folders on the server (debounced)
+    clearTimeout(folderSearchTimer);
+    if (q.length >= 2) {
+        folderSearchTimer = setTimeout(async () => {
+            try {
+                const res = await fetch(`/api/folders/search?q=${encodeURIComponent(q)}`);
+                if (res.status === 401) {
+                    window.location.href = "/login";
+                    return;
+                }
+                const data = await res.json();
+                if (document.getElementById("modal-folder-search-input") && document.getElementById("modal-folder-search-input").value.trim() === q) {
+                    currentFolderSearchResults = (data.results || []).filter(item => !item.name.includes("הגברת החירות"));
+                    highlightedSearchResultIndex = 0;
+                    renderFolderSearchResults(currentFolderSearchResults, q, false);
+                }
+            } catch (err) {
+                console.warn("Folder search failed:", err);
+            }
+        }, 220);
+    }
+}
+
+function clearFolderSearch(shouldRender = true) {
+    const input = document.getElementById("modal-folder-search-input");
+    const clearBtn = document.getElementById("modal-search-clear-btn");
+    if (input) input.value = "";
+    if (clearBtn) clearBtn.style.display = "none";
+    clearTimeout(folderSearchTimer);
+    currentFolderSearchResults = null;
+    highlightedSearchResultIndex = 0;
+    if (shouldRender) {
+        renderExplorerView();
+    }
+}
+
+function renderFolderSearchResults(results, query, isLocalOnly = false) {
+    const listContainer = document.getElementById("modal-folders-list");
+    if (!listContainer) return;
+
+    if (!results || results.length === 0) {
+        listContainer.innerHTML = `
+            <div style="text-align: center; padding: 2.5rem 1rem; color: var(--text-muted);">
+                <div style="font-size: 2rem; margin-bottom: 0.5rem;">🔍</div>
+                <div style="font-weight: 600; font-size: 1rem; color: var(--text-main); margin-bottom: 0.25rem;">
+                    לא נמצאו תיקיות עבור "${escapeHtml(query)}"
+                </div>
+                <div style="font-size: 0.85rem;">
+                    נסה לחפש במילים קצרות יותר, או צור תיקייה חדשה למטה
+                </div>
+            </div>
+        `;
+        return;
+    }
+
+    const countLabel = isLocalOnly 
+        ? `${results.length} תיקיות בתיקייה זו` 
+        : `${results.length} תיקיות ברחבי השרת`;
+
+    let html = `
+        <div class="search-results-header">
+            <span>תוצאות חיפוש עבור "<strong>${escapeHtml(query)}</strong>" (${countLabel}):</span>
+            <button type="button" class="btn btn-sm btn-outline" onclick="clearFolderSearch(true)" style="padding: 2px 8px; font-size: 0.75rem;">חזור לתצוגה רגילה</button>
+        </div>
+    `;
+
+    html += results.map((item, idx) => {
+        const isHighlighted = idx === highlightedSearchResultIndex;
+        const displayPath = item.breadcrumb || item.rel_path || item.name;
+        const safeFull = encodeURIComponent(item.full_path).replace(/'/g, "%27");
+        const safeRel = encodeURIComponent(item.rel_path || item.name).replace(/'/g, "%27");
+
+        return `
+            <div class="search-result-row ${isHighlighted ? 'highlighted' : ''}" 
+                 id="search-res-${idx}" 
+                 onclick="enterSearchResultFolder('${safeFull}')"
+                 onmouseenter="highlightedSearchResultIndex = ${idx}; updateSearchHighlightedUI();">
+                <div class="search-result-main">
+                    <div class="search-result-title">
+                        <span>📁</span>
+                        <span>${escapeHtml(item.name)}</span>
+                    </div>
+                    <div class="search-result-path" title="${escapeHtml(displayPath)}">
+                        ${escapeHtml(displayPath)}
+                    </div>
+                </div>
+                <div class="search-result-actions" onclick="event.stopPropagation();">
+                    <button type="button" 
+                            class="btn-select-search-result" 
+                            onclick="confirmDirectFolderSelection('${safeFull}', '${safeRel}')"
+                            title="בחר תיקייה זו כתיקיית יעד וסגור">
+                        ✓ בחר תיקייה זו
+                    </button>
+                    <button type="button" 
+                            class="btn-enter-search-result" 
+                            onclick="enterSearchResultFolder('${safeFull}')"
+                            title="פתח תיקייה זו בסייר">
+                        היכנס ❮
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join("");
+
+    listContainer.innerHTML = html;
+}
+
+function enterSearchResultFolder(encodedFull) {
+    const full = decodeURIComponent(encodedFull);
+    clearFolderSearch(false);
+    fetchFolderContent(full);
+}
+
+function confirmDirectFolderSelection(encodedFull, encodedRel) {
+    const full = decodeURIComponent(encodedFull);
+    const rel = decodeURIComponent(encodedRel);
+
+    if (activeCardIndex === "edit-modal") {
+        document.getElementById("edit-lesson-dest-path").value = full;
+        document.getElementById("edit-lesson-folder-label").innerText = rel || "ראשי (שרת הישיבה)";
+    } else if (activeCardIndex !== null) {
+        document.getElementById(`dest-path-${activeCardIndex}`).value = full;
+        document.getElementById(`folder-label-${activeCardIndex}`).innerText = rel || "ראשי (שורש)";
+    }
+    setStoredFolderPath(full, false);
+    closeFolderModal();
+}
+
+function updateSearchHighlightedUI() {
+    const rows = document.querySelectorAll(".search-result-row");
+    rows.forEach((row, i) => {
+        row.classList.toggle("highlighted", i === highlightedSearchResultIndex);
+    });
+}
+
+function handleFolderSearchKeyDown(e) {
+    if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        clearFolderSearch(true);
+        return;
+    }
+
+    if (currentFolderSearchResults && currentFolderSearchResults.length > 0) {
+        if (e.key === "ArrowDown") {
+            e.preventDefault();
+            highlightedSearchResultIndex = (highlightedSearchResultIndex + 1) % currentFolderSearchResults.length;
+            updateSearchHighlightedUI();
+            const el = document.getElementById(`search-res-${highlightedSearchResultIndex}`);
+            if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            highlightedSearchResultIndex = (highlightedSearchResultIndex - 1 + currentFolderSearchResults.length) % currentFolderSearchResults.length;
+            updateSearchHighlightedUI();
+            const el = document.getElementById(`search-res-${highlightedSearchResultIndex}`);
+            if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        } else if (e.key === "Enter") {
+            e.preventDefault();
+            const item = currentFolderSearchResults[highlightedSearchResultIndex];
+            if (item) {
+                if (e.ctrlKey) {
+                    confirmDirectFolderSelection(encodeURIComponent(item.full_path), encodeURIComponent(item.rel_path || item.name));
+                } else {
+                    enterSearchResultFolder(encodeURIComponent(item.full_path));
+                }
+            }
+        }
+    }
+}
+
 function openFolderExplorer(cardIndex) {
     activeCardIndex = cardIndex;
-    fetchFolderContent("");
+    clearFolderSearch(false);
+    const currentStoredPath = getStoredFolderPath();
+    fetchFolderContent(currentStoredPath);
     document.getElementById("folder-modal").classList.add("open");
 }
 
 function closeFolderModal() {
+    stopModalAudioPreview();
+    clearFolderSearch(false);
+    if (currentFolderData) {
+        setStoredFolderPath(currentFolderData.current_full_path, currentFolderData.is_root);
+    }
     document.getElementById("folder-modal").classList.remove("open");
     activeCardIndex = null;
 }
@@ -370,33 +664,97 @@ function renderExplorerView() {
     const breadcrumbsContainer = document.getElementById("modal-breadcrumbs");
     const listContainer = document.getElementById("modal-folders-list");
 
-    // 1. Breadcrumbs
-    let parts = currentFolderData.current_rel_path ? currentFolderData.current_rel_path.split(/[\\/]/) : [];
-    let breadcrumbsHtml = `
-        <span class="crumb ${parts.length === 0 ? 'active' : ''}" onclick="fetchFolderContent('')">
-            🏢 שרת הישיבה (ראשי)
-        </span>
-    `;
+    // 1. Interactive Breadcrumbs Trail (Functions as Navigation & Back Button)
+    let parts = currentFolderData.current_rel_path ? currentFolderData.current_rel_path.replace(/\\/g, "/").split("/").filter(Boolean) : [];
 
-    let accumulatedPath = "";
-    parts.forEach((part, idx) => {
-        if (!part) return;
-        accumulatedPath += (accumulatedPath ? "/" : "") + part;
-        const isLast = idx === parts.length - 1;
-        breadcrumbsHtml += `
-            <span class="crumb-separator">❯</span>
-            <span class="crumb ${isLast ? 'active' : ''}" onclick="${isLast ? '' : `fetchFolderByRelativePath('${escapeHtml(accumulatedPath)}')`}">
-                ${escapeHtml(part)}
-            </span>
-        `;
+    const rootPath = currentFolderData.root_full_path || (currentFolderData.is_root ? currentFolderData.current_full_path : currentFolderData.current_full_path.slice(0, currentFolderData.current_full_path.length - (currentFolderData.current_rel_path || "").length).replace(/[\\/]$/, ""));
+
+    window.modalBreadcrumbs = [];
+    window.modalBreadcrumbs.push({ name: "שרת הישיבה (ראשי)", path: rootPath });
+
+    let accumulatedPath = rootPath;
+    parts.forEach((part) => {
+        accumulatedPath += "/" + part;
+        window.modalBreadcrumbs.push({ name: part, path: accumulatedPath });
     });
-    breadcrumbsContainer.innerHTML = breadcrumbsHtml;
 
-    // 2. Folder List (Without ".." row)
-    const subfolders = currentFolderData.subfolders || [];
+    let crumbsHtml = "";
+    if (parts.length > 0) {
+        const parentCrumbIndex = window.modalBreadcrumbs.length - 2;
+        crumbsHtml += `
+            <button type="button" 
+                    class="btn-crumb-up" 
+                    onclick="navigateToBreadcrumb(${parentCrumbIndex})" 
+                    title="חזור תיקייה אחת אחורה">
+                <span>↩</span>
+                <span>אחורה</span>
+            </button>
+            <span class="crumb-separator" style="opacity: 0.4;">|</span>
+        `;
+    }
+
+    crumbsHtml += window.modalBreadcrumbs.map((crumb, idx) => {
+        const isLast = idx === window.modalBreadcrumbs.length - 1;
+        const icon = idx === 0 ? "🏢" : "📁";
+        return `
+            ${idx > 0 ? `<span class="crumb-separator">❯</span>` : ''}
+            <button type="button" 
+                    class="crumb-btn ${isLast ? 'active-crumb' : ''}" 
+                    onclick="navigateToBreadcrumb(${idx})"
+                    title="${isLast ? 'תיקייה נוכחית' : `חזור לתיקיית ${escapeHtml(crumb.name)}`}">
+                <span>${icon}</span>
+                <span>${escapeHtml(crumb.name)}</span>
+            </button>
+        `;
+    }).join("");
+
+    breadcrumbsContainer.innerHTML = crumbsHtml;
+
+    // 2. Beautiful Existing Audio Files in current folder
+    const audioFiles = currentFolderData.audio_files || [];
+    let audioFilesHtml = "";
+    if (audioFiles.length > 0) {
+        audioFilesHtml = `
+            <div class="existing-lessons-panel">
+                <div class="existing-lessons-header">
+                    <div class="existing-lessons-title">
+                        <span class="icon">🎙️</span>
+                        <span>שיעורים קיימים בתיקייה זו</span>
+                    </div>
+                    <span class="existing-lessons-badge">${audioFiles.length} שיעורים</span>
+                </div>
+                <div class="existing-lessons-list">
+                    ${audioFiles.map((name, i) => {
+                        const cleanName = name.replace(/\.(mp3|wav|m4a|ogg)$/i, "");
+                        const ext = (name.split('.').pop() || 'MP3').toUpperCase();
+                        return `
+                            <div class="existing-lesson-item">
+                                <div class="existing-lesson-main">
+                                    <span class="existing-lesson-icon">🎵</span>
+                                    <div class="existing-lesson-info">
+                                        <div class="existing-lesson-name" title="${escapeHtml(name)}">${escapeHtml(cleanName)}</div>
+                                        <span class="existing-lesson-ext">${ext}</span>
+                                    </div>
+                                </div>
+                                <button type="button" 
+                                        class="btn-preview-audio" 
+                                        id="preview-btn-${i}"
+                                        onclick="toggleModalAudioPreview('${encodeURIComponent(name).replace(/'/g, "%27")}', 'preview-btn-${i}')"
+                                        title="השמע שיעור">
+                                    ▶ השמע
+                                </button>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            </div>
+        `;
+    }
+
+    const subfolders = (currentFolderData.subfolders || []).filter(sub => !sub.name.includes("הגברת החירות"));
 
     if (subfolders.length === 0) {
-        listContainer.innerHTML = `
+        listContainer.innerHTML = audioFilesHtml + `
             <div class="empty-folder-hint">
                 📁 אין תת-תיקיות נוספות בתוך '${escapeHtml(currentFolderData.current_name)}'.<br>
                 <div style="margin-top: 1rem;">
@@ -409,7 +767,7 @@ function renderExplorerView() {
         return;
     }
 
-    listContainer.innerHTML = subfolders.map((sub, idx) => `
+    listContainer.innerHTML = audioFilesHtml + subfolders.map((sub, idx) => `
         <div class="folder-row ${idx === highlightedFolderIndex ? 'highlighted' : ''}" 
              id="folder-item-${idx}" 
              onclick="handleItemClick(${idx})"
@@ -459,7 +817,10 @@ function setupKeyboardListeners() {
         const modal = document.getElementById("folder-modal");
         if (!modal.classList.contains("open")) return;
 
-        // If typing in new folder input, allow normal typing
+        // If typing in new folder input or search input, allow normal typing
+        if (document.activeElement === document.getElementById("modal-folder-search-input")) {
+            return;
+        }
         if (document.activeElement === document.getElementById("new-folder-input")) {
             if (e.key === "Enter") {
                 createNewFolderInCurrentDir();
@@ -679,7 +1040,7 @@ function renderAllNotes() {
                 <div class="card-header">
                     <div>
                         <span class="badge ${note.status === 'open' ? 'badge-alert' : 'badge-hebrew-date'}">${note.status === 'open' ? 'פתוחה' : 'טופלה'}</span>
-                        <strong style="margin-right: 0.5rem;">${escapeHtml(note.filename)}</strong>
+                        <strong style="margin-right: 0.5rem; direction: ltr; unicode-bidi: isolate; display: inline-block;"><bdi>${escapeHtml(note.filename)}</bdi></strong>
                     </div>
                     <div style="display: flex; align-items: center; gap: 0.4rem;" title="${escapeHtml(note.created_at || '')}">
                         <span class="badge badge-hebrew-date">${escapeHtml(getNoteHebrewDate(note) || formatNoteDateDisplay(note))}</span>
@@ -691,10 +1052,12 @@ function renderAllNotes() {
                     <p style="font-size: 0.85rem; color: var(--text-muted);"><strong>נשלח ע"י:</strong> ${escapeHtml(note.student_name)}</p>
                 </div>
                 <div class="note-actions">
-                    <button class="btn btn-primary btn-sm" onclick="openEditLessonModal('${encodeURIComponent(note.filename).replace(/'/g, '%27')}', ${note.id})">✏️ ערוך שיעור</button>
                     ${note.status === 'open' ? `
+                        <button class="btn btn-primary btn-sm" onclick="openEditLessonModal('${encodeURIComponent(note.filename).replace(/'/g, '%27')}', ${note.id})">✏️ ערוך שיעור</button>
                         <button class="btn btn-outline btn-sm" onclick="resolveNote(${note.id})">✓ סמן כטופל</button>
-                    ` : ''}
+                    ` : `
+                        <button class="btn btn-sm" disabled style="opacity: 0.5; cursor: not-allowed; background: #e2e8f0; color: #94a3b8; border: 1px solid #cbd5e1;" title="ההערה כבר סומנה כטופלה">✏️ ערוך שיעור (טופל)</button>
+                    `}
                 </div>
             </div>
         `).join("");
@@ -704,11 +1067,37 @@ function renderAllNotes() {
 }
 
 async function resolveNote(noteId) {
-    const form = new FormData();
-    form.append("note_id", noteId);
-    form.append("status", "resolved");
-    await fetch("/api/notes/status", { method: "POST", body: form });
-    loadNotes();
+    try {
+        const form = new FormData();
+        form.append("note_id", noteId);
+        form.append("status", "resolved");
+        await fetch("/api/notes/status", { method: "POST", body: form });
+
+        // 1. Remove banner from lesson card in DOM immediately with smooth animation
+        const banner = document.getElementById(`note-banner-${noteId}`);
+        if (banner) {
+            banner.style.transition = "all 0.25s ease";
+            banner.style.opacity = "0";
+            banner.style.maxHeight = "0";
+            banner.style.margin = "0";
+            banner.style.padding = "0";
+            banner.style.overflow = "hidden";
+            setTimeout(() => banner.remove(), 260);
+        }
+
+        // 2. Remove the note from pendingLessons in memory
+        pendingLessons.forEach(lesson => {
+            if (lesson.notes && lesson.notes.length > 0) {
+                lesson.notes = lesson.notes.filter(n => n.id !== noteId);
+            }
+        });
+
+        // 3. Refresh notes tab and badge count
+        await loadNotes();
+    } catch (e) {
+        console.error("Error resolving note:", e);
+        alert("שגיאה בעדכון ההערה: " + e.message);
+    }
 }
 
 function getNoteHebrewDate(note) {
@@ -817,6 +1206,11 @@ async function deleteLesson(index, encodedFilename, encodedSourcePath) {
 async function openEditLessonModal(encodedFilename, noteId) {
     const filename = decodeURIComponent(encodedFilename);
     const note = allNotes.find(n => n.id === noteId);
+
+    if (note && note.status !== "open") {
+        alert("הערה זו כבר סומנה כטופלה ולא ניתן לערוך את השיעור.");
+        return;
+    }
 
     if (note) {
         document.getElementById("edit-modal-student-name").innerText = note.student_name || "תלמיד אנונימי";

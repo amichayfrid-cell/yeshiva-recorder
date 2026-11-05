@@ -511,6 +511,14 @@ def api_list_folders_post(request: Request, body: FolderListRequest):
     data = storage.list_direct_subfolders(body.path)
     return JSONResponse({"status": "success", **data})
 
+@app.get("/api/folders/search")
+def api_search_folders(request: Request, q: str = Query("", description="Folder search query")):
+    if not is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    results = storage.search_folders(q)
+    return JSONResponse({"status": "success", "results": results, "query": q})
+
 @app.post("/api/folders/create")
 def api_create_folder(request: Request, base_folder: str = Form(...), new_folder_name: str = Form(...)):
     if not is_authenticated(request):
@@ -551,9 +559,9 @@ def classify_lesson(
     clean_date = hebrew_date.strip().replace("/", "-")
 
     if clean_topic:
-        final_filename = f"{clean_rabbi}_{clean_topic}_({clean_date}){ext}"
+        final_filename = f"{clean_rabbi}_{clean_topic} ({clean_date}){ext}"
     else:
-        final_filename = f"{clean_rabbi}_({clean_date}){ext}"
+        final_filename = f"{clean_rabbi} ({clean_date}){ext}"
 
     unique_dest_path = get_unique_filepath(dest_dir, final_filename)
 
@@ -719,9 +727,9 @@ def update_lesson(
     clean_date = hebrew_date.strip().replace("/", "-")
 
     if clean_topic:
-        final_filename = f"{clean_rabbi}_{clean_topic}_({clean_date}){ext}"
+        final_filename = f"{clean_rabbi}_{clean_topic} ({clean_date}){ext}"
     else:
-        final_filename = f"{clean_rabbi}_({clean_date}){ext}"
+        final_filename = f"{clean_rabbi} ({clean_date}){ext}"
 
     unique_dest_path = get_unique_filepath(dest_dir, final_filename)
 
