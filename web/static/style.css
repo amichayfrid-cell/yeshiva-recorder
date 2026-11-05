@@ -1114,17 +1114,23 @@ body {
 
 
 .modal-header {
-
     padding: 1rem 1.5rem;
-
     border-bottom: 1px solid var(--border);
-
     display: flex;
-
     justify-content: space-between;
-
     align-items: center;
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+}
 
+.modal-header:active {
+    cursor: grabbing;
+}
+
+.modal-box.is-dragging {
+    transition: none !important;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.45) !important;
 }
 
 

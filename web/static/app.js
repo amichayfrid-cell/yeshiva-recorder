@@ -13,7 +13,91 @@ document.addEventListener("DOMContentLoaded", () => {
     loadPendingLessons();
     loadNotes();
     setupKeyboardListeners();
+    makeModalDraggable("folder-modal");
+    makeModalDraggable("edit-lesson-modal");
 });
+
+// ==========================================
+// Floating Draggable Modals Mechanism
+// ==========================================
+function makeModalDraggable(modalId) {
+    const modal = document.getElementById(modalId);
+    if (!modal) return;
+    const box = modal.querySelector(".modal-box");
+    const header = modal.querySelector(".modal-header");
+    if (!box || !header) return;
+
+    header.style.cursor = "grab";
+    header.setAttribute("title", "לחץ וגרור כדי להזיז את החלון");
+
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+    let currentX = 0;
+    let currentY = 0;
+
+    box._resetDrag = function() {
+        currentX = 0;
+        currentY = 0;
+        box.style.transform = "";
+    };
+
+    function onPointerDown(e) {
+        if (e.target.closest("button, input, select, textarea, a")) return;
+
+        isDragging = true;
+        header.style.cursor = "grabbing";
+        box.classList.add("is-dragging");
+
+        const pageX = e.type.startsWith("touch") ? e.touches[0].clientX : e.clientX;
+        const pageY = e.type.startsWith("touch") ? e.touches[0].clientY : e.clientY;
+
+        startX = pageX - currentX;
+        startY = pageY - currentY;
+
+        window.addEventListener("mousemove", onPointerMove);
+        window.addEventListener("mouseup", onPointerUp);
+        window.addEventListener("touchmove", onPointerMove, { passive: false });
+        window.addEventListener("touchend", onPointerUp);
+    }
+
+    function onPointerMove(e) {
+        if (!isDragging) return;
+        if (e.cancelable && e.type === "touchmove") e.preventDefault();
+
+        const pageX = e.type.startsWith("touch") ? e.touches[0].clientX : e.clientX;
+        const pageY = e.type.startsWith("touch") ? e.touches[0].clientY : e.clientY;
+
+        let newX = pageX - startX;
+        let newY = pageY - startY;
+
+        const boundX = Math.max(100, (window.innerWidth / 2) - 60);
+        const boundY = Math.max(60, (window.innerHeight / 2) - 40);
+
+        newX = Math.max(-boundX, Math.min(boundX, newX));
+        newY = Math.max(-boundY, Math.min(boundY, newY));
+
+        currentX = newX;
+        currentY = newY;
+        box.style.transform = `translate3d(${newX}px, ${newY}px, 0)`;
+    }
+
+    function onPointerUp() {
+        if (!isDragging) return;
+        isDragging = false;
+        header.style.cursor = "grab";
+        box.classList.remove("is-dragging");
+
+        window.removeEventListener("mousemove", onPointerMove);
+        window.removeEventListener("mouseup", onPointerUp);
+        window.removeEventListener("touchmove", onPointerMove);
+        window.removeEventListener("touchend", onPointerUp);
+    }
+
+    header.addEventListener("mousedown", onPointerDown);
+    header.addEventListener("touchstart", onPointerDown, { passive: true });
+}
+
 
 // Refresh all views
 function refreshAll() {
@@ -643,6 +727,8 @@ function handleFolderSearchKeyDown(e) {
 function openFolderExplorer(cardIndex) {
     activeCardIndex = cardIndex;
     clearFolderSearch(false);
+    const box = document.querySelector("#folder-modal .modal-box");
+    if (box && box._resetDrag) box._resetDrag();
     const currentStoredPath = getStoredFolderPath();
     fetchFolderContent(currentStoredPath);
     document.getElementById("folder-modal").classList.add("open");
@@ -1303,6 +1389,8 @@ async function openEditLessonModal(encodedFilename, noteId, btnElement = null) {
         audio.src = `/api/audio/stream?filename=${encodeURIComponent(data.full_path).replace(/'/g, '%27')}`;
         audio.load();
 
+        const editBox = document.querySelector("#edit-lesson-modal .modal-box");
+        if (editBox && editBox._resetDrag) editBox._resetDrag();
         document.getElementById("edit-lesson-modal").classList.add("open");
     } catch (e) {
         alert("שגיאה בטעינת פרטי הקובץ: " + e.message);
