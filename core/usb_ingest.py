@@ -270,7 +270,10 @@ def copy_and_verify_from_usb(
         return None
 
     try:
-        expected_size = source_file.stat().st_size
+        source_stat = source_file.stat()
+        expected_size = source_stat.st_size
+        source_mtime = source_stat.st_mtime
+        source_atime = source_stat.st_atime
     except (OSError, FileNotFoundError):
         print(f"[USB Ingest] Could not read source file (device disconnected?): {source_file}")
         return None
@@ -278,6 +281,16 @@ def copy_and_verify_from_usb(
     if expected_size <= 0:
         print(f"[USB Ingest] Skipping empty 0-byte file: {source_file.name}")
         return None
+
+    # Extract true recording datetime directly from the source recorder file before copying
+    rec_timestamp = source_mtime
+    try:
+        from core.hebrew_date import extract_recording_datetime
+        rec_dt = extract_recording_datetime(source_file, stat_obj=source_stat)
+        if rec_dt:
+            rec_timestamp = rec_dt.timestamp()
+    except Exception:
+        pass
 
     filename = target_name if target_name else source_file.name
 
@@ -349,6 +362,12 @@ def copy_and_verify_from_usb(
                     audio.save()
                 except Exception:
                     pass
+
+        # Always preserve and restore the true recording timestamp on the ingested target file
+        try:
+            os.utime(str(unique_target), (source_atime, rec_timestamp))
+        except Exception:
+            pass
 
         # Delete source ONLY after verified copy
         if delete_source:

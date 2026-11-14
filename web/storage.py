@@ -272,12 +272,13 @@ def save_note(
         
     return new_note
 
-def update_note_status(note_id: int, status: str) -> bool:
-    """Updates status of a note (e.g., 'resolved')."""
+def update_note_status(note_id: Any, status: str) -> bool:
+    """Updates status of a note (e.g., 'resolved'). Accepts either int or str ID."""
     notes = get_notes_data()
     updated = False
+    str_id = str(note_id).strip() if note_id is not None else ""
     for n in notes:
-        if n.get("id") == note_id:
+        if str(n.get("id")) == str_id:
             n["status"] = status
             updated = True
             break

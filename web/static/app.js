@@ -1077,7 +1077,7 @@ function renderExplorerView() {
                         const editBtnHtml = isWeeklyFolder ? "" : `
                             <button type="button" 
                                     class="btn-edit-existing-lesson" 
-                                    onclick="openEditFromExplorer('${encodeURIComponent(name).replace(/'/g, "%27")}', this)"
+                                    onclick="openEditFromExplorer('${encodeURIComponent(name).replace(/'/g, "%27")}', '${encodeURIComponent(currentFolderData.current_full_path || "").replace(/'/g, "%27")}', this)"
                                     title="ערוך שיעור זה">
                                 ✏️ ערוך
                             </button>
@@ -2028,9 +2028,10 @@ function hebrewCompareKey(s) {
             .toLowerCase();
 }
 
-async function openEditFromExplorer(encodedFilename, btnElement = null) {
+async function openEditFromExplorer(encodedFilename, encodedFolderPath = "", btnElement = null) {
     const filename = decodeURIComponent(encodedFilename);
-    if (!currentFolderData) return;
+    const folderPath = encodedFolderPath ? decodeURIComponent(encodedFolderPath) : (currentFolderData?.current_full_path || "");
+    if (!currentFolderData && !folderPath) return;
 
     stopModalAudioPreview();
 
@@ -2048,7 +2049,6 @@ async function openEditFromExplorer(encodedFilename, btnElement = null) {
     // Temporarily hide folder modal so edit modal is cleanly visible
     document.getElementById("folder-modal").classList.remove("open");
 
-    const folderPath = currentFolderData.current_full_path || "";
     await openEditLessonModal(encodedFilename, noteId, btnElement, folderPath);
 }
 
@@ -2078,7 +2078,7 @@ async function openEditLessonModal(encodedFilename, noteId, btnElement = null, f
         if (modalTitle) modalTitle.innerText = "✏️ עריכת שיעור";
         if (saveBtn) saveBtn.innerHTML = "💾 שמור שינויים";
     }
-    document.getElementById("edit-lesson-note-id").value = noteId || "";
+    document.getElementById("edit-lesson-note-id").value = noteId ? String(noteId) : "";
 
     let origPath = "";
     let folderPath = forcedFolderPath || "";
@@ -2101,15 +2101,31 @@ async function openEditLessonModal(encodedFilename, noteId, btnElement = null, f
     }
 
     try {
-        const queryParams = new URLSearchParams({
-            filename: filename,
-            note_id: noteId || '',
-            original_path: origPath,
-            folder_path: folderPath
-        });
+        const queryParams = new URLSearchParams();
+        queryParams.set("filename", filename);
+        if (noteId) {
+            queryParams.set("note_id", String(noteId));
+        }
+        if (origPath) {
+            queryParams.set("original_path", origPath);
+        }
+        if (folderPath) {
+            queryParams.set("folder_path", folderPath);
+        }
+
         const res = await fetch(`/api/lessons/details_for_edit?${queryParams.toString()}`);
         if (res.status === 401) {
             window.location.href = "/login";
+            return;
+        }
+        if (!res.ok) {
+            const errorText = await res.text();
+            console.error("details_for_edit error:", res.status, errorText);
+            alert(`⚠️ שגיאה בטעינת השיעור מהשרת (קוד שגיאה ${res.status}). אנא נסה שוב.`);
+            if (editOpenedFromExplorer) {
+                editOpenedFromExplorer = false;
+                document.getElementById("folder-modal").classList.add("open");
+            }
             return;
         }
         const data = await res.json();
@@ -2132,7 +2148,7 @@ async function openEditLessonModal(encodedFilename, noteId, btnElement = null, f
         document.getElementById("edit-lesson-folder-label").innerText = data.parent_folder_rel || "בחר תיקייה...";
 
         const audio = document.getElementById("audio-edit");
-        audio.src = `/api/audio/stream?filename=${encodeURIComponent(data.full_path).replace(/'/g, '%27')}`;
+        audio.src = `/api/audio/stream?filename=${encodeURIComponent(data.filename).replace(/'/g, '%27')}&source_path=${encodeURIComponent(data.full_path).replace(/'/g, '%27')}`;
         audio.load();
 
         restoreModalState("edit-lesson-modal");

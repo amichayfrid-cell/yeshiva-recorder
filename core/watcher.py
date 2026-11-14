@@ -6,7 +6,11 @@ from pathlib import Path
 from typing import List
 
 import config
-from core.hebrew_date import get_hebrew_date_str
+from core.hebrew_date import (
+    get_hebrew_date_str, 
+    extract_recording_datetime, 
+    extract_hebrew_date_from_filename
+)
 from core.file_manager import (
     safe_move,
     get_unique_filepath,
@@ -38,14 +42,11 @@ def is_file_ready(filepath: Path, wait_seconds: float = 1.0) -> bool:
 def get_file_timestamp(filepath: Path) -> datetime:
     """
     Extracts the original file creation/modification datetime.
+    Uses multi-tier detection: metadata, filename pattern, and preserved file stat.
     """
-    try:
-        stat = filepath.stat()
-        return datetime.fromtimestamp(stat.st_mtime)
-    except Exception:
-        return datetime.now()
+    return extract_recording_datetime(filepath)
 
-def generate_timestamp_filename(file_dt: datetime, original_extension: str = ".mp3") -> str:
+def generate_timestamp_filename(file_dt: datetime, original_extension: str = ".mp3", hebrew_date: Optional[str] = None) -> str:
     """
     Generates filename strictly in Hebrew date + time format without Gregorian date.
     Format: '(תאריך עברי) HH.MM.ext'
@@ -54,8 +55,8 @@ def generate_timestamp_filename(file_dt: datetime, original_extension: str = ".m
     and prevent RTL reversal (never flips to 30_19).
     """
     time_str = file_dt.strftime("%H.%M")
-    hebrew_date = get_hebrew_date_str(file_dt)
-    return f"({hebrew_date}) {time_str}{original_extension}"
+    heb = hebrew_date or get_hebrew_date_str(file_dt)
+    return f"({heb}) {time_str}{original_extension}"
 
 def sync_local_staging_to_network() -> None:
     """
@@ -91,15 +92,16 @@ def process_single_audio_file(filepath: Path) -> Path:
     start_time = time.time()
     original_name = filepath.name
     ext = filepath.suffix.lower()
-    file_dt = get_file_timestamp(filepath)
-    hebrew_date_str = get_hebrew_date_str(file_dt)
+    file_dt = extract_recording_datetime(filepath)
+    existing_heb = extract_hebrew_date_from_filename(original_name)
+    hebrew_date_str = existing_heb if existing_heb else get_hebrew_date_str(file_dt)
 
     print(f"\n" + "=" * 60)
     print(f"[Pipeline] Processing file: {original_name}")
     print(f"[Pipeline] Original recording time: {file_dt.strftime('%H:%M')} ({hebrew_date_str})")
 
     # Generate filename: '(תאריך עברי) HH.MM.mp3'
-    target_filename = generate_timestamp_filename(file_dt, original_extension=ext)
+    target_filename = generate_timestamp_filename(file_dt, original_extension=ext, hebrew_date=hebrew_date_str)
     target_dir = config.get_final_target_dir()
     unique_target_path = get_unique_filepath(target_dir, target_filename)
 
@@ -155,6 +157,13 @@ def process_single_audio_file(filepath: Path) -> Path:
                 audio.save()
             except Exception:
                 pass
+
+    # Ensure final file keeps the true recording timestamp
+    try:
+        ts = file_dt.timestamp()
+        os.utime(str(final_path), (ts, ts))
+    except Exception:
+        pass
 
     # Record history
     duration_sec = round(time.time() - start_time, 2)

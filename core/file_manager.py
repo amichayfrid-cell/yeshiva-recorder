@@ -105,6 +105,13 @@ def apply_id3_tags(
 
         file_str = str(filepath)
         try:
+            st = filepath.stat()
+            orig_atime = st.st_atime
+            orig_mtime = st.st_mtime
+        except Exception:
+            orig_atime = orig_mtime = None
+
+        try:
             audio = EasyID3(file_str)
         except ID3NoHeaderError:
             audio = MP3(file_str)
@@ -133,6 +140,13 @@ def apply_id3_tags(
                 if mp3_raw.tags is not None:
                     mp3_raw.tags.add(TXXX(encoding=3, desc="recorder", text=[recorder]))
                     mp3_raw.save()
+            except Exception:
+                pass
+
+        # Preserve the original file recording timestamp so ID3 tag writes don't taint mtime
+        if orig_mtime is not None:
+            try:
+                os.utime(file_str, (orig_atime, orig_mtime))
             except Exception:
                 pass
 

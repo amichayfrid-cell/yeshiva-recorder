@@ -23,7 +23,11 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 import config
-from core.hebrew_date import get_hebrew_date_str
+from core.hebrew_date import (
+    get_hebrew_date_str, 
+    extract_recording_datetime, 
+    extract_hebrew_date_from_filename
+)
 from core.file_manager import apply_id3_tags, get_unique_filepath
 from web import storage
 
@@ -527,8 +531,13 @@ def list_pending_lessons(request: Request):
 
         for f, st in entries:
             try:
-                file_dt = datetime.fromtimestamp(st.st_mtime)
-                hebrew_date = get_hebrew_date_str(file_dt)
+                # Extract true recording datetime (from internal metadata, filename patterns, or preserved stat)
+                file_dt = extract_recording_datetime(f, stat_obj=st)
+                
+                # Extract Hebrew date: prioritize existing Hebrew date in filename if present, else convert with sunset check
+                existing_heb = extract_hebrew_date_from_filename(f.name)
+                hebrew_date = existing_heb if existing_heb else get_hebrew_date_str(file_dt)
+                
                 notes = notes_by_filename.get(f.name, [])
 
                 custom_label = source_label
@@ -546,7 +555,7 @@ def list_pending_lessons(request: Request):
                     "size_bytes": st.st_size,
                     "size_mb": round(st.st_size / (1024 * 1024), 1),
                     "created_time": file_dt.strftime("%H:%M"),
-                    "mtime": st.st_mtime,
+                    "mtime": file_dt.timestamp(),
                     "hebrew_date": hebrew_date,
                     "notes": notes,
                     "source": source_key,
@@ -1143,18 +1152,25 @@ def locate_lesson_file(
 def get_lesson_details_for_edit(
     request: Request, 
     filename: str = Query(...), 
-    note_id: Optional[int] = Query(None),
+    note_id: Optional[str] = Query(None),
     original_path: Optional[str] = Query(None),
     folder_path: Optional[str] = Query(None)
 ):
     if not is_authenticated(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
     
+    clean_note_id: Optional[int] = None
+    if note_id and str(note_id).strip():
+        try:
+            clean_note_id = int(str(note_id).strip())
+        except (ValueError, TypeError):
+            clean_note_id = None
+
     # Auto-fetch original_path from note if not provided in query
-    if not original_path and note_id:
+    if not original_path and clean_note_id:
         try:
             for n in storage.get_notes_data():
-                if n.get("id") == note_id and n.get("original_path"):
+                if n.get("id") == clean_note_id and n.get("original_path"):
                     original_path = n.get("original_path")
                     break
         except Exception:
@@ -1183,7 +1199,7 @@ def get_lesson_details_for_edit(
         rabbi = parts[0].strip()
 
     if not hebrew_date:
-        file_dt = datetime.fromtimestamp(file_path.stat().st_mtime)
+        file_dt = extract_recording_datetime(file_path)
         hebrew_date = get_hebrew_date_str(file_dt)
 
     root_str = str(config.NETWORK_MOUNT_POINT if config.NETWORK_MOUNT_POINT.exists() else config.LOCAL_STAGING_DIR)
@@ -1214,10 +1230,17 @@ def update_lesson(
     lesson_topic: Optional[str] = Form(""),
     hebrew_date: str = Form(...),
     destination_folder: str = Form(...),
-    note_id: Optional[int] = Form(None)
+    note_id: Optional[str] = Form(None)
 ):
     if not is_authenticated(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+    clean_note_id: Optional[int] = None
+    if note_id and str(note_id).strip():
+        try:
+            clean_note_id = int(str(note_id).strip())
+        except (ValueError, TypeError):
+            clean_note_id = None
 
     source_file = Path(source_path)
     if not source_file.exists() or not source_file.is_file():
@@ -1261,8 +1284,10 @@ def update_lesson(
         source_file.unlink(missing_ok=True)
 
     # 3. Mark note as resolved if provided
-    if note_id:
-        storage.update_note_status(note_id, "resolved")
+    if clean_note_id is not None:
+        storage.update_note_status(clean_note_id, "resolved")
+    elif note_id and str(note_id).strip():
+        storage.update_note_status(str(note_id).strip(), "resolved")
     
     # Also resolve notes for old source file name
     for note in storage.get_notes_for_file(source_file.name):
