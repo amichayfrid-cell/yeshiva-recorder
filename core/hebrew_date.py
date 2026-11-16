@@ -49,11 +49,11 @@ def get_israel_sunset_time(d: date) -> time:
         else:
             return time(18, 0)
 
-def get_hebrew_date_str(dt: Optional[datetime] = None, check_sunset: bool = True) -> str:
+def get_hebrew_date_str(dt: Optional[datetime] = None, check_sunset: bool = False) -> str:
     """
-    Converts a datetime object to a filesystem-friendly Hebrew date string (e.g. 'כד חשון תשפז').
-    If check_sunset is True, advances the Hebrew date by 1 day if recorded after sunset.
-    If pyluach is not available, falls back to ISO format.
+    Converts a datetime object to a filesystem-friendly Hebrew date string (e.g. 'ה כסלו תשפז').
+    In the yeshiva, recordings and lectures throughout the evening/night seder belong to that day's date,
+    transitioning at midnight (00:00). check_sunset defaults to False.
     """
     if dt is None:
         dt = datetime.now()
@@ -297,18 +297,12 @@ def extract_recording_datetime(
     p = Path(filepath) if isinstance(filepath, (str, Path)) else None
     fn = p.name if p else str(filepath)
 
-    # 1. Internal audio metadata
-    if p and p.is_file():
-        meta_dt = extract_audio_metadata_datetime(p)
-        if meta_dt and 2000 <= meta_dt.year <= 2040:
-            return meta_dt
-
-    # 2. Full datetime from filename
+    # 1. Fast in-memory check: Full datetime from filename (e.g. 261115_1949, 20261115_1949)
     fn_dt = parse_filename_datetime(fn)
     if fn_dt and 2000 <= fn_dt.year <= 2040:
         return fn_dt
 
-    # 3. Check file system timestamps
+    # 2. File system modification timestamp (already in memory from os.scandir)
     base_dt = None
     if stat_obj:
         base_dt = datetime.fromtimestamp(stat_obj.st_mtime)
@@ -319,14 +313,25 @@ def extract_recording_datetime(
         except Exception:
             pass
 
-    # 4. Check time-only from filename (e.g. '(כד חשון) 11-32.mp3' -> 11:32)
+    # 3. Time-only embedded in filename combined with file stat date (e.g. '19.49.mp3', '(ה כסלו) 19.49.mp3')
     fn_time = parse_filename_time_only(fn)
     if fn_time:
         target_d = base_dt.date() if base_dt else datetime.now().date()
         return datetime.combine(target_d, fn_time)
 
-    # 5. File system timestamp
-    if base_dt:
+    # 4. Use file system timestamp directly if valid
+    if base_dt and 2000 <= base_dt.year <= 2040:
         return base_dt
+
+    # 5. Fallback: Internal audio metadata (only when filename & stat have no valid time)
+    if p and p.is_file():
+        try:
+            meta_dt = extract_audio_metadata_datetime(p)
+            if meta_dt and 2000 <= meta_dt.year <= 2040:
+                return meta_dt
+        except Exception:
+            pass
+
+    return base_dt if base_dt else datetime.now()
 
     return datetime.now()

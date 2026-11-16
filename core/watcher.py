@@ -93,8 +93,8 @@ def process_single_audio_file(filepath: Path) -> Path:
     original_name = filepath.name
     ext = filepath.suffix.lower()
     file_dt = extract_recording_datetime(filepath)
-    existing_heb = extract_hebrew_date_from_filename(original_name)
-    hebrew_date_str = existing_heb if existing_heb else get_hebrew_date_str(file_dt)
+    # Hebrew date of the recording is calculated directly from the true recording datetime (no sunset shift)
+    hebrew_date_str = get_hebrew_date_str(file_dt, check_sunset=False)
 
     print(f"\n" + "=" * 60)
     print(f"[Pipeline] Processing file: {original_name}")

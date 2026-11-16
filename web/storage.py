@@ -14,6 +14,7 @@ NOTES_FILE = config.DATA_DIR / "notes.json"
 
 RECORDER_SOURCES_FILE = config.DATA_DIR / "recorder_sources.json"
 _RECORDER_SOURCES_CACHE: Optional[Dict[str, str]] = None
+_RECORDER_NEGATIVE_CACHE: set = set()
 
 def decode_raw_label(raw_label: Optional[str]) -> str:
     """
@@ -175,8 +176,8 @@ def get_recorder_source(filename: str, filepath: Optional[Path] = None) -> Optio
     if base_match != clean_fn and base_match in sources:
         return normalize_recorder_label(sources[base_match]) or sources[base_match]
 
-    # Try reading from ID3 tag if filepath exists
-    if filepath and filepath.exists() and filepath.suffix.lower() == ".mp3":
+    # Try reading from ID3 tag if filepath exists (cached to avoid repeat network reads)
+    if clean_fn not in _RECORDER_NEGATIVE_CACHE and filepath and filepath.exists() and filepath.suffix.lower() == ".mp3":
         try:
             from mutagen.id3 import ID3
             audio = ID3(str(filepath))
@@ -187,8 +188,9 @@ def get_recorder_source(filename: str, filepath: Optional[Path] = None) -> Optio
                         norm = normalize_recorder_label(val) or val
                         set_recorder_source(clean_fn, norm)
                         return norm
+            _RECORDER_NEGATIVE_CACHE.add(clean_fn)
         except Exception:
-            pass
+            _RECORDER_NEGATIVE_CACHE.add(clean_fn)
 
     return None
 

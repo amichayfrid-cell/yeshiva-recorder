@@ -450,7 +450,7 @@ def submit_student_note(
 
 _PENDING_LESSONS_CACHE: Optional[Dict[str, Any]] = None
 _PENDING_LESSONS_CACHE_TIME: float = 0.0
-_PENDING_CACHE_TTL: float = 3.5
+_PENDING_CACHE_TTL: float = 8.0
 
 def invalidate_pending_lessons_cache():
     global _PENDING_LESSONS_CACHE
@@ -533,16 +533,39 @@ def list_pending_lessons(request: Request):
             try:
                 # Extract true recording datetime (from internal metadata, filename patterns, or preserved stat)
                 file_dt = extract_recording_datetime(f, stat_obj=st)
+                correct_heb = get_hebrew_date_str(file_dt, check_sunset=False)
                 
-                # Extract Hebrew date: prioritize existing Hebrew date in filename if present, else convert with sunset check
-                existing_heb = extract_hebrew_date_from_filename(f.name)
-                hebrew_date = existing_heb if existing_heb else get_hebrew_date_str(file_dt)
+                curr_fn = f.name
+                curr_path = f
+                if source_key == "recorder":
+                    # Fix any filenames with obsolete sunset-shifted Hebrew dates
+                    m_prefix = re.match(r'^\(([^)]+)\)\s*(.+)$', f.name)
+                    if m_prefix:
+                        old_heb = m_prefix.group(1).strip()
+                        rest_name = m_prefix.group(2).strip()
+                        if old_heb != correct_heb and any(h_month in old_heb for h_month in ["תשרי", "חשון", "חשוון", "כסלו", "טבת", "שבט", "אדר", "ניסן", "אייר", "סיון", "סיוון", "תמוז", "אב", "אלול"]):
+                            new_name = f"({correct_heb}) {rest_name}"
+                            new_path = f.parent / new_name
+                            try:
+                                os.replace(str(f), str(new_path))
+                                os.utime(str(new_path), (st.st_atime, st.st_mtime))
+                                rec_source = storage.get_recorder_source(f.name)
+                                if rec_source:
+                                    storage.set_recorder_source(new_name, rec_source)
+                                curr_fn = new_name
+                                curr_path = new_path
+                            except Exception:
+                                pass
+                    hebrew_date = correct_heb
+                else:
+                    existing_heb = extract_hebrew_date_from_filename(f.name)
+                    hebrew_date = existing_heb if existing_heb else correct_heb
                 
-                notes = notes_by_filename.get(f.name, [])
+                notes = notes_by_filename.get(curr_fn, [])
 
                 custom_label = source_label
                 if source_key == "recorder":
-                    rec = storage.get_recorder_source(f.name, filepath=f)
+                    rec = storage.get_recorder_source(curr_fn, filepath=curr_path)
                     norm_rec = storage.normalize_recorder_label(rec) if rec else None
                     if norm_rec:
                         custom_label = norm_rec
@@ -550,8 +573,8 @@ def list_pending_lessons(request: Request):
                         custom_label = rec
                 
                 lessons.append({
-                    "filename": f.name,
-                    "full_path": str(f),
+                    "filename": curr_fn,
+                    "full_path": str(curr_path),
                     "size_bytes": st.st_size,
                     "size_mb": round(st.st_size / (1024 * 1024), 1),
                     "created_time": file_dt.strftime("%H:%M"),
