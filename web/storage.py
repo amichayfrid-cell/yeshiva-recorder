@@ -16,6 +16,42 @@ RECORDER_SOURCES_FILE = config.DATA_DIR / "recorder_sources.json"
 _RECORDER_SOURCES_CACHE: Optional[Dict[str, str]] = None
 _RECORDER_NEGATIVE_CACHE: set = set()
 
+RECORDER_ALIASES_FILE = config.DATA_DIR / "recorder_aliases.json"
+_RECORDER_ALIASES_CACHE: Optional[Dict[str, str]] = None
+
+def get_recorder_aliases() -> Dict[str, str]:
+    global _RECORDER_ALIASES_CACHE
+    if _RECORDER_ALIASES_CACHE is not None:
+        return dict(_RECORDER_ALIASES_CACHE)
+    if not RECORDER_ALIASES_FILE.exists():
+        _RECORDER_ALIASES_CACHE = {}
+        return {}
+    try:
+        with open(RECORDER_ALIASES_FILE, "r", encoding="utf-8") as f:
+            _RECORDER_ALIASES_CACHE = json.load(f)
+            return dict(_RECORDER_ALIASES_CACHE)
+    except Exception:
+        _RECORDER_ALIASES_CACHE = {}
+        return {}
+
+def save_recorder_alias(old_label: str, new_label: str):
+    global _RECORDER_ALIASES_CACHE
+    if not old_label or not new_label:
+        return
+    aliases = get_recorder_aliases()
+    clean_new = new_label.strip()
+    aliases[str(old_label).strip()] = clean_new
+    dec = decode_raw_label(old_label)
+    if dec:
+        aliases[dec] = clean_new
+    _RECORDER_ALIASES_CACHE = aliases
+    try:
+        RECORDER_ALIASES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(RECORDER_ALIASES_FILE, "w", encoding="utf-8") as f:
+            json.dump(aliases, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
 def decode_raw_label(raw_label: Optional[str]) -> str:
     """
     Decodes raw drive labels that might contain hex escapes (e.g. '\\x8e\\x97\\x8c\\x88 4'),
@@ -81,6 +117,7 @@ def normalize_recorder_label(raw_label: Optional[str]) -> Optional[str]:
     """
     Cleans and normalizes various recorder naming conventions into a clean Hebrew label.
     Decodes CP862/hex escapes automatically.
+    Persists user custom names across sessions.
     Examples:
     - '\\x8e\\x97\\x8c\\x88 4' -> 'מקלט 4'
     - 'מקלט 4', 'מקלט_4', 'מקלט-4', 'מקלט4' -> 'מקלט 4'
@@ -92,9 +129,17 @@ def normalize_recorder_label(raw_label: Optional[str]) -> Optional[str]:
     """
     if not raw_label:
         return None
-    clean = decode_raw_label(raw_label)
+    raw_str = str(raw_label).strip()
+    clean = decode_raw_label(raw_str)
     if not clean:
         return None
+
+    # Check custom user aliases first
+    aliases = get_recorder_aliases()
+    if raw_str in aliases:
+        return aliases[raw_str]
+    if clean in aliases:
+        return aliases[clean]
     generic = {
         'NO NAME', 'NONAME', 'UNTITLED', 'USB DISK', 'USB DRIVE', 'REMOVABLE',
         'TRANSCEND', 'SANDISK', 'KINGSTON', 'FAT32', 'FAT16', 'EXFAT', 'VOLUME',
@@ -210,22 +255,23 @@ def set_recorder_source(filename: str, source_label: str):
 
 def set_all_recorders_source(old_label: str, new_label: str):
     global _RECORDER_SOURCES_CACHE
+    clean_new = normalize_recorder_label(new_label) or new_label.strip()
+    save_recorder_alias(old_label, clean_new)
     sources = get_recorder_sources()
     norm_old = normalize_recorder_label(old_label) or old_label.strip()
-    norm_new = normalize_recorder_label(new_label) or new_label.strip()
+    norm_new = clean_new
     updated = False
     for fn, lbl in list(sources.items()):
-        if lbl == norm_old or lbl == old_label:
+        if lbl == norm_old or lbl == old_label or (normalize_recorder_label(lbl) == norm_old):
             sources[fn] = norm_new
             updated = True
-    if updated:
-        _RECORDER_SOURCES_CACHE = sources
-        try:
-            RECORDER_SOURCES_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(RECORDER_SOURCES_FILE, "w", encoding="utf-8") as f:
-                json.dump(sources, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+    _RECORDER_SOURCES_CACHE = sources
+    try:
+        RECORDER_SOURCES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(RECORDER_SOURCES_FILE, "w", encoding="utf-8") as f:
+            json.dump(sources, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 def remove_recorder_source(filename: str):
     global _RECORDER_SOURCES_CACHE
