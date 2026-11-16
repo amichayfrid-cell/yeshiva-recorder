@@ -418,7 +418,7 @@ function renderFolderBar(title, count, canRename = false, renameLabel = "") {
 
     let renameBtnHtml = "";
     if (canRename && renameLabel) {
-        renameBtnHtml = `<button type="button" class="btn-secondary" style="font-size:0.75rem; padding: 2px 8px; margin-right: 8px; border-radius: 4px; cursor: pointer;" onclick="editAllRecorderNames('${escapeHtml(renameLabel)}')" title="שנה את שם המקלט לכל השיעורים בתיקייה זו">✏️ שנה שם מקלט</button>`;
+        renameBtnHtml = `<button type="button" class="btn-secondary" style="font-size:0.75rem; padding: 2px 8px; margin-right: 8px; border-radius: 4px; cursor: pointer;" onclick="editAllRecorderNames('${encodeURIComponent(renameLabel)}')" title="שנה את שם המקלט לכל השיעורים בתיקייה זו">✏️ שנה שם מקלט</button>`;
     }
 
     breadcrumbs.innerHTML = `
@@ -1936,8 +1936,9 @@ function escapeHtml(str) {
 // Edit Recorder Name directly from badge (always updates all lessons from this recorder and persists forever)
 async function editRecorderName(encodedFilename, currentLabel) {
     const filename = decodeURIComponent(encodedFilename);
-    const newName = prompt("הזן שם עבור מקלט זה (למשל: מקלט 4, מקלט א, בית מדרש):", currentLabel || "מקלט 1");
-    if (!newName || newName.trim() === "" || newName.trim() === currentLabel) return;
+    const prevLabel = (currentLabel || "מקלט 1").trim();
+    const newName = prompt("הזן שם עבור מקלט זה (למשל: מקלט 4, מקלט א, בית מדרש):", prevLabel);
+    if (!newName || newName.trim() === "" || newName.trim() === prevLabel) return;
 
     const trimmedNew = newName.trim();
 
@@ -1946,31 +1947,37 @@ async function editRecorderName(encodedFilename, currentLabel) {
         form.append("filename", filename);
         form.append("recorder_label", trimmedNew);
         form.append("update_all", "true");
-        form.append("old_label", currentLabel || "");
+        form.append("old_label", prevLabel);
 
         const res = await fetch("/api/lessons/set_recorder_source", { method: "POST", body: form });
         const data = await res.json();
         if (data.status === "success") {
             const updatedLabel = data.recorder_label;
             pendingLessons.forEach(l => {
-                if (l.source === 'recorder' && ((l.source_label || "מקלט 1") === currentLabel || l.source_label === old_label || l.filename === filename)) {
-                    l.source_label = updatedLabel;
+                if (l.source === 'recorder') {
+                    const lLabel = (l.source_label || "מקלט 1").trim();
+                    if (lLabel === prevLabel || l.filename === filename || lLabel === "מקלט שמע") {
+                        l.source_label = updatedLabel;
+                    }
                 }
             });
-            if (currentPendingSource === `recorder:${currentLabel}` || currentPendingSource === 'recorder') {
+            if (currentPendingSource === `recorder:${prevLabel}` || currentPendingSource === 'recorder' || !currentPendingSource) {
                 currentPendingSource = `recorder:${updatedLabel}`;
             }
             renderPendingFolders();
             renderPendingLessons();
+            // Background sync from server to ensure perfect alignment
+            loadPendingLessons();
         }
     } catch (e) {
         alert("שגיאה בעדכון שם המקלט: " + e.message);
     }
 }
 
-async function editAllRecorderNames(currentLabel) {
-    const newName = prompt(`הזן שם חדש עבור כל השיעורים שהוקלטו ב-${currentLabel} (למשל: מקלט 4):`, currentLabel || "מקלט 1");
-    if (!newName || newName.trim() === "" || newName.trim() === currentLabel) return;
+async function editAllRecorderNames(encodedLabel) {
+    const prevLabel = (decodeURIComponent(encodedLabel) || "מקלט 1").trim();
+    const newName = prompt(`הזן שם חדש עבור כל השיעורים שהוקלטו ב-${prevLabel} (למשל: מקלט 4, בית מדרש):`, prevLabel);
+    if (!newName || newName.trim() === "" || newName.trim() === prevLabel) return;
     const trimmedNew = newName.trim();
 
     try {
@@ -1978,22 +1985,27 @@ async function editAllRecorderNames(currentLabel) {
         form.append("filename", "");
         form.append("recorder_label", trimmedNew);
         form.append("update_all", "true");
-        form.append("old_label", currentLabel || "");
+        form.append("old_label", prevLabel);
 
         const res = await fetch("/api/lessons/set_recorder_source", { method: "POST", body: form });
         const data = await res.json();
         if (data.status === "success") {
             const updatedLabel = data.recorder_label;
             pendingLessons.forEach(l => {
-                if (l.source === 'recorder' && (!l.source_label || l.source_label === currentLabel || l.source_label === "מקלט שמע")) {
-                    l.source_label = updatedLabel;
+                if (l.source === 'recorder') {
+                    const lLabel = (l.source_label || "מקלט 1").trim();
+                    if (lLabel === prevLabel || lLabel === "מקלט שמע") {
+                        l.source_label = updatedLabel;
+                    }
                 }
             });
-            if (currentPendingSource === `recorder:${currentLabel}` || currentPendingSource === 'recorder') {
+            if (currentPendingSource === `recorder:${prevLabel}` || currentPendingSource === 'recorder' || !currentPendingSource) {
                 currentPendingSource = `recorder:${updatedLabel}`;
             }
             renderPendingFolders();
             renderPendingLessons();
+            // Background sync from server to ensure perfect alignment
+            loadPendingLessons();
         }
     } catch (e) {
         alert("שגיאה בעדכון שם המקלט: " + e.message);

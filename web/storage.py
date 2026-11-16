@@ -265,6 +265,24 @@ def set_all_recorders_source(old_label: str, new_label: str):
         if lbl == norm_old or lbl == old_label or (normalize_recorder_label(lbl) == norm_old):
             sources[fn] = norm_new
             updated = True
+
+    # Also explicitly map all pending files in sorting_dir matching this recorder
+    try:
+        from core.watcher import get_sorting_dir
+        sorting_dir = get_sorting_dir()
+        if sorting_dir and sorting_dir.exists():
+            for entry in os.scandir(sorting_dir):
+                if entry.is_file() and entry.name.lower().endswith(tuple(config.AUDIO_EXTENSIONS)):
+                    curr_lbl = sources.get(entry.name)
+                    if not curr_lbl:
+                        sources[entry.name] = norm_new
+                        updated = True
+                    elif curr_lbl == norm_old or curr_lbl == old_label or (normalize_recorder_label(curr_lbl) == norm_old):
+                        sources[entry.name] = norm_new
+                        updated = True
+    except Exception:
+        pass
+
     _RECORDER_SOURCES_CACHE = sources
     try:
         RECORDER_SOURCES_FILE.parent.mkdir(parents=True, exist_ok=True)
