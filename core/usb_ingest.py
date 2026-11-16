@@ -206,8 +206,7 @@ def get_drive_label(drive_path: Path) -> str:
                 for link in by_label_dir.iterdir():
                     try:
                         if link.resolve() == Path(dev_source).resolve():
-                            decoded_name = link.name.encode('utf-8').decode('unicode_escape')
-                            normalized = storage.normalize_recorder_label(decoded_name)
+                            normalized = storage.normalize_recorder_label(link.name)
                             if normalized:
                                 return normalized
                     except Exception:

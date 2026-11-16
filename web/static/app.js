@@ -309,7 +309,7 @@ async function loadPendingLessons() {
     }
 }
 
-// Render Folder Cards (like Rav Tzvi)
+// Render Folder Cards (Multi-Recorder Support)
 function renderPendingFolders() {
     const foldersSection = document.getElementById("pending-folders-section");
     const foldersGrid = document.getElementById("pending-folders-grid");
@@ -324,44 +324,75 @@ function renderPendingFolders() {
 
     foldersSection.style.display = "block";
 
-    const uploadCount = pendingLessons.filter(l => l.source === 'upload').length;
+    const uploadLessons = pendingLessons.filter(l => l.source === 'upload');
     const recorderLessons = pendingLessons.filter(l => l.source !== 'upload');
-    const recorderCount = recorderLessons.length;
 
-    let primaryRecorderLabel = "מקלט 1";
-    if (recorderLessons.length > 0) {
-        const labelCounts = {};
-        recorderLessons.forEach(l => {
-            const lbl = l.source_label || "מקלט 1";
-            labelCounts[lbl] = (labelCounts[lbl] || 0) + 1;
-        });
-        primaryRecorderLabel = Object.keys(labelCounts).reduce((a, b) => labelCounts[a] > labelCounts[b] ? a : b);
+    // Group recorder lessons by their decoded clean label
+    const recorderGroups = {};
+    recorderLessons.forEach(l => {
+        const lbl = l.source_label || "מקלט 1";
+        if (!recorderGroups[lbl]) {
+            recorderGroups[lbl] = [];
+        }
+        recorderGroups[lbl].push(l);
+    });
+
+    const sortedRecorderLabels = Object.keys(recorderGroups).sort((a, b) => 
+        a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+    );
+
+    let cardsHtml = "";
+
+    // 1. "All Lessons" card if there are multiple sources
+    const totalSources = (uploadLessons.length > 0 ? 1 : 0) + sortedRecorderLabels.length;
+    if (totalSources > 1) {
+        const isAllSelected = (currentPendingSource === 'all');
+        cardsHtml += `
+            <div class="folder-card ${isAllSelected ? 'selected' : ''}" onclick="selectPendingFolder('all')">
+                <span class="folder-icon">📂</span>
+                <div style="flex: 1; min-width: 0;">
+                    <div class="folder-name" title="כל השיעורים">כל השיעורים</div>
+                    <div class="folder-sub">${pendingLessons.length} שיעורים</div>
+                </div>
+            </div>
+        `;
     }
 
-    const uploadSubText = uploadCount > 0 ? `${uploadCount} שיעורים` : 'אין שיעורים';
-    const recorderSubText = recorderCount > 0 ? `${recorderCount} שיעורים` : 'אין שיעורים';
-
-    foldersGrid.innerHTML = `
-        <div class="folder-card ${currentPendingSource === 'upload' ? 'selected' : ''}" onclick="selectPendingFolder('upload')">
-            <span class="folder-icon">📁</span>
-            <div style="flex: 1; min-width: 0;">
-                <div class="folder-name" title="העלאת שיעורים">העלאת שיעורים</div>
-                <div class="folder-sub">${uploadSubText}</div>
+    // 2. "Upload Lessons" card
+    if (uploadLessons.length > 0 || totalSources <= 1) {
+        const isUploadSelected = (currentPendingSource === 'upload');
+        cardsHtml += `
+            <div class="folder-card ${isUploadSelected ? 'selected' : ''}" onclick="selectPendingFolder('upload')">
+                <span class="folder-icon">📤</span>
+                <div style="flex: 1; min-width: 0;">
+                    <div class="folder-name" title="העלאת שיעורים">העלאת שיעורים</div>
+                    <div class="folder-sub">${uploadLessons.length > 0 ? uploadLessons.length + ' שיעורים' : 'אין שיעורים'}</div>
+                </div>
             </div>
-        </div>
-        <div class="folder-card ${currentPendingSource === 'recorder' ? 'selected' : ''}" onclick="selectPendingFolder('recorder')">
-            <span class="folder-icon">📁</span>
-            <div style="flex: 1; min-width: 0;">
-                <div class="folder-name" title="שיעורים למיון (${primaryRecorderLabel})">שיעורים למיון (${primaryRecorderLabel})</div>
-                <div class="folder-sub">${recorderSubText}</div>
-            </div>
-        </div>
-    `;
+        `;
+    }
 
-    renderFolderBar(uploadCount, recorderCount, primaryRecorderLabel);
+    // 3. Separate card for EACH distinct recorder
+    sortedRecorderLabels.forEach(lbl => {
+        const count = recorderGroups[lbl].length;
+        const targetKey = 'recorder:' + lbl;
+        const isSelected = (currentPendingSource === targetKey);
+        cardsHtml += `
+            <div class="folder-card ${isSelected ? 'selected' : ''}" onclick="selectPendingFolder('${encodeURIComponent(targetKey).replace(/'/g, "%27")}')">
+                <span class="folder-icon">🎙️</span>
+                <div style="flex: 1; min-width: 0;">
+                    <div class="folder-name" title="${escapeHtml(lbl)}">${escapeHtml(lbl)}</div>
+                    <div class="folder-sub">${count} שיעורים</div>
+                </div>
+            </div>
+        `;
+    });
+
+    foldersGrid.innerHTML = cardsHtml;
 }
 
-function selectPendingFolder(source) {
+function selectPendingFolder(encodedSource) {
+    const source = encodedSource ? decodeURIComponent(encodedSource) : null;
     if (currentPendingSource === source) {
         currentPendingSource = null;
     } else {
@@ -371,7 +402,7 @@ function selectPendingFolder(source) {
     renderPendingLessons();
 }
 
-function renderFolderBar(uploadCount, recorderCount, primaryRecorderLabel = "מקלט 1") {
+function renderFolderBar(title, count, canRename = false, renameLabel = "") {
     syncSortOrderUI();
     const folderBar = document.getElementById("current-folder-bar");
     const breadcrumbs = document.getElementById("pending-breadcrumbs");
@@ -385,20 +416,17 @@ function renderFolderBar(uploadCount, recorderCount, primaryRecorderLabel = "מ�
 
     folderBar.style.display = "flex";
 
-    if (currentPendingSource === 'upload') {
-        breadcrumbs.innerHTML = `
-            <span class="breadcrumb-crumb" onclick="selectPendingFolder(null)" title="חזור לכל התיקיות">📁 תיקיות</span>
-            <span class="breadcrumb-sep">❮</span>
-            <span>📤 העלאת שיעורים (${uploadCount} שיעורים)</span>
-        `;
-    } else if (currentPendingSource === 'recorder') {
-        breadcrumbs.innerHTML = `
-            <span class="breadcrumb-crumb" onclick="selectPendingFolder(null)" title="חזור לכל התיקיות">📁 תיקיות</span>
-            <span class="breadcrumb-sep">❮</span>
-            <span>🎙️ שיעורים למיון - ${escapeHtml(primaryRecorderLabel)} (${recorderCount} שיעורים)</span>
-            <button type="button" class="btn-secondary" style="font-size:0.75rem; padding: 2px 8px; margin-right: 8px; border-radius: 4px; cursor: pointer;" onclick="editAllRecorderNames('${escapeHtml(primaryRecorderLabel)}')" title="שנה את שם המקלט לכל השיעורים">✏️ שנה שם מקלט</button>
-        `;
+    let renameBtnHtml = "";
+    if (canRename && renameLabel) {
+        renameBtnHtml = `<button type="button" class="btn-secondary" style="font-size:0.75rem; padding: 2px 8px; margin-right: 8px; border-radius: 4px; cursor: pointer;" onclick="editAllRecorderNames('${escapeHtml(renameLabel)}')" title="שנה את שם המקלט לכל השיעורים בתיקייה זו">✏️ שנה שם מקלט</button>`;
     }
+
+    breadcrumbs.innerHTML = `
+        <span class="breadcrumb-crumb" onclick="selectPendingFolder(null)" title="חזור לכל התיקיות">📁 תיקיות</span>
+        <span class="breadcrumb-sep">❮</span>
+        <span>${escapeHtml(title)} (${count} שיעורים)</span>
+        ${renameBtnHtml}
+    `;
 
     if (btnClose) {
         btnClose.style.display = "inline-flex";
@@ -423,17 +451,40 @@ function renderPendingLessons() {
 
     // By default, do not display lessons until user clicks into a folder
     if (!currentPendingSource) {
+        renderFolderBar("", 0);
         listContainer.innerHTML = `
             <div class="empty-state" style="padding: 2.75rem 1.5rem; background: #ffffff; border: 1px dashed var(--border); border-radius: var(--radius); box-shadow: var(--shadow);">
                 <div class="icon" style="font-size: 2.8rem; margin-bottom: 0.75rem;">📂</div>
                 <h3 style="font-size: 1.2rem; color: var(--text-main); margin-bottom: 0.4rem;">בחר תיקייה כדי להתחיל במיון השיעורים</h3>
-                <p style="color: var(--text-muted); font-size: 0.95rem; margin: 0 auto; max-width: 480px; line-height: 1.5;">לחץ על אחת התיקיות למעלה (<strong>העלאת שיעורים</strong> או <strong>שיעורים למיון</strong>) כדי להיכנס ולסווג את השיעורים הממתינים בה.</p>
+                <p style="color: var(--text-muted); font-size: 0.95rem; margin: 0 auto; max-width: 480px; line-height: 1.5;">לחץ על אחת התיקיות למעלה כדי להיכנס ולסווג את השיעורים הממתינים בה.</p>
             </div>
         `;
         return;
     }
 
-    let filtered = pendingLessons.filter(l => currentPendingSource === 'upload' ? l.source === 'upload' : l.source !== 'upload');
+    let filtered = [];
+    let currentTitle = "";
+    let canRenameRecorder = false;
+    let renameRecorderLabel = "";
+
+    if (currentPendingSource === 'all') {
+        filtered = [...pendingLessons];
+        currentTitle = "כל השיעורים למיון";
+    } else if (currentPendingSource === 'upload') {
+        filtered = pendingLessons.filter(l => l.source === 'upload');
+        currentTitle = "העלאת שיעורים";
+    } else if (currentPendingSource.startsWith('recorder:')) {
+        const targetLabel = currentPendingSource.substring('recorder:'.length);
+        filtered = pendingLessons.filter(l => (l.source_label || "מקלט 1") === targetLabel);
+        currentTitle = `שיעורים למיון - ${targetLabel}`;
+        canRenameRecorder = true;
+        renameRecorderLabel = targetLabel;
+    } else if (currentPendingSource === 'recorder') {
+        filtered = pendingLessons.filter(l => l.source !== 'upload');
+        currentTitle = "שיעורים למיון (כל המקלטים)";
+    }
+
+    renderFolderBar(currentTitle, filtered.length, canRenameRecorder, renameRecorderLabel);
 
     filtered.sort((a, b) => {
         const timeA = (a.mtime && a.mtime > 0) ? a.mtime : 0;
@@ -447,17 +498,20 @@ function renderPendingLessons() {
     });
 
     if (filtered.length === 0) {
-        const folderTitle = currentPendingSource === 'upload' ? 'העלאת שיעורים' : 'שיעורים למיון (מקלט שמע)';
         listContainer.innerHTML = `
             <div class="empty-state">
                 <div class="icon">📁</div>
-                <h3>אין שיעורים בתיקיית '${folderTitle}'</h3>
+                <h3>אין שיעורים בתיקיית '${escapeHtml(currentTitle)}'</h3>
                 <p>כל השיעורים בתיקייה זו מוינו בהצלחה.</p>
                 <div style="margin-top: 1rem;">
                     <button class="btn btn-outline" onclick="selectPendingFolder(null)">
                         ✕ סגור הכל
                     </button>
                 </div>
+            </div>
+        `;
+        return;
+    }
             </div>
         `;
         return;
@@ -2028,6 +2082,22 @@ function hebrewCompareKey(s) {
             .toLowerCase();
 }
 
+function hebrewKeysMatch(s1, s2) {
+    if (!s1 || !s2) return false;
+    const k1 = hebrewCompareKey(s1);
+    const k2 = hebrewCompareKey(s2);
+    if (!k1 || !k2) return false;
+    if (k1 === k2) return true;
+    const m1 = k1.match(/^(\d+)/);
+    const m2 = k2.match(/^(\d+)/);
+    if (m1 && m2 && parseInt(m1[1], 10) !== parseInt(m2[1], 10)) {
+        return false;
+    }
+    const k1Strip = k1.replace(/^\d+/, '');
+    const k2Strip = k2.replace(/^\d+/, '');
+    return Boolean(k1Strip && k1Strip === k2Strip);
+}
+
 async function openEditFromExplorer(encodedFilename, encodedFolderPath = "", btnElement = null) {
     const filename = decodeURIComponent(encodedFilename);
     const folderPath = encodedFolderPath ? decodeURIComponent(encodedFolderPath) : (currentFolderData?.current_full_path || "");
@@ -2040,7 +2110,7 @@ async function openEditFromExplorer(encodedFilename, encodedFolderPath = "", btn
     const keyFile = hebrewCompareKey(filename);
     const matchingNote = (allNotes || []).find(n => {
         const nBase = (n.filename || "").replace(/\\/g, "/").split("/").pop();
-        return (normalizeHebrewQuotes(nBase) === normFile || (keyFile && hebrewCompareKey(nBase) === keyFile)) && n.status === "open";
+        return (normalizeHebrewQuotes(nBase) === normFile || hebrewKeysMatch(nBase, filename)) && n.status === "open";
     });
 
     const noteId = matchingNote ? matchingNote.id : null;

@@ -794,6 +794,29 @@ def hebrew_compare_key(s: str) -> str:
     s = re.sub(r'[\s_()\-–—.,/\\:;!?[\]{}]+', '', s)
     return s.strip().lower()
 
+def hebrew_keys_match(s1: str, s2: str) -> bool:
+    """
+    Checks if two Hebrew filenames or strings match with tolerance for:
+    - Hebrew quotes, geresh, gershayim, dashes, spaces, and punctuation
+    - Optional leading track numbers/digits (e.g. '49הרב דרור...' matches 'הרב דרור...', '01' matches '1')
+    """
+    if not s1 or not s2:
+        return False
+    k1 = hebrew_compare_key(s1)
+    k2 = hebrew_compare_key(s2)
+    if not k1 or not k2:
+        return False
+    if k1 == k2:
+        return True
+    m1 = re.match(r'^(\d+)', k1)
+    m2 = re.match(r'^(\d+)', k2)
+    if m1 and m2:
+        if int(m1.group(1)) != int(m2.group(1)):
+            return False
+    k1_strip = re.sub(r'^\d+', '', k1)
+    k2_strip = re.sub(r'^\d+', '', k2)
+    return bool(k1_strip and k1_strip == k2_strip)
+
 def resolve_path_with_fuzzy_hebrew(base_dir: Path, relative_parts: List[str]) -> Optional[Path]:
     """
     Traverses from base_dir through relative_parts segment by segment.
@@ -828,7 +851,7 @@ def resolve_path_with_fuzzy_hebrew(base_dir: Path, relative_parts: List[str]) ->
                     if normalize_hebrew_string(entry.name).lower() == norm_part:
                         matched = Path(entry.path)
                         break
-                    if key_part and hebrew_compare_key(entry.name) == key_part:
+                    if hebrew_keys_match(entry.name, part):
                         matched = Path(entry.path)
                         break
         except Exception:
@@ -941,10 +964,10 @@ def locate_lesson_file(
                         _FILE_LOCATION_CACHE[clean_fn] = fuzzy_p
                         _FILE_LOCATION_CACHE[fn_key] = fuzzy_p
                         return fuzzy_p
-                    # Check directory entries with hebrew_compare_key
+                    # Check directory entries with hebrew_keys_match
                     with os.scandir(str(f_base)) as it:
                         for entry in it:
-                            if entry.is_file() and hebrew_compare_key(entry.name) == fn_key:
+                            if entry.is_file() and hebrew_keys_match(entry.name, clean_fn):
                                 found = Path(entry.path)
                                 _FILE_LOCATION_CACHE[clean_fn] = found
                                 _FILE_LOCATION_CACHE[fn_key] = found
@@ -963,7 +986,7 @@ def locate_lesson_file(
                 if cand.parent.is_dir():
                     with os.scandir(str(cand.parent)) as it:
                         for entry in it:
-                            if entry.is_file() and hebrew_compare_key(entry.name) == fn_key:
+                            if entry.is_file() and hebrew_keys_match(entry.name, clean_fn):
                                 found = Path(entry.path)
                                 _FILE_LOCATION_CACHE[clean_fn] = found
                                 _FILE_LOCATION_CACHE[fn_key] = found
@@ -1013,7 +1036,7 @@ def locate_lesson_file(
             return fuzzy_sort
         with os.scandir(str(sorting_dir)) as it:
             for entry in it:
-                if entry.is_file() and hebrew_compare_key(entry.name) == fn_key:
+                if entry.is_file() and hebrew_keys_match(entry.name, clean_fn):
                     found = Path(entry.path)
                     _FILE_LOCATION_CACHE[clean_fn] = found
                     _FILE_LOCATION_CACHE[fn_key] = found
@@ -1037,7 +1060,7 @@ def locate_lesson_file(
                     return fuzzy_up
                 with os.scandir(str(upload_dir)) as it:
                     for entry in it:
-                        if entry.is_file() and hebrew_compare_key(entry.name) == fn_key:
+                        if entry.is_file() and hebrew_keys_match(entry.name, clean_fn):
                             found = Path(entry.path)
                             _FILE_LOCATION_CACHE[clean_fn] = found
                             _FILE_LOCATION_CACHE[fn_key] = found
@@ -1049,7 +1072,7 @@ def locate_lesson_file(
     try:
         for n in storage.get_notes_data():
             n_fn = os.path.basename(n.get("filename", "").replace('\\', '/'))
-            if (normalize_hebrew_string(n_fn).lower() == norm_fn or hebrew_compare_key(n_fn) == fn_key) and n.get("original_path"):
+            if (normalize_hebrew_string(n_fn).lower() == norm_fn or hebrew_keys_match(n_fn, clean_fn)) and n.get("original_path"):
                 for cand in resolve_possible_local_paths(n["original_path"]):
                     try:
                         if cand.is_file():
@@ -1059,7 +1082,7 @@ def locate_lesson_file(
                         if cand.parent.is_dir():
                             with os.scandir(str(cand.parent)) as it:
                                 for entry in it:
-                                    if entry.is_file() and hebrew_compare_key(entry.name) == fn_key:
+                                    if entry.is_file() and hebrew_keys_match(entry.name, clean_fn):
                                         found = Path(entry.path)
                                         _FILE_LOCATION_CACHE[clean_fn] = found
                                         _FILE_LOCATION_CACHE[fn_key] = found
@@ -1069,21 +1092,49 @@ def locate_lesson_file(
     except Exception:
         pass
 
-    # 8. Check candidate subfolders in storage.get_all_folders_flat()
+    # 8. Check candidate subfolders in storage.get_all_folders_flat() with smart relevance scoring
     try:
         all_folders = storage.get_all_folders_flat()
-        fn_words = [w for w in re.split(r'[\s_()\-"]+', norm_fn) if len(w) >= 3 and not w.endswith('.mp3')]
-        extra_words = [re.sub(r'[^\wא-ת]', '', w) for w in fn_words if len(re.sub(r'[^\wא-ת]', '', w)) >= 3]
-        all_search_words = set(fn_words + extra_words)
+        fn_raw_words = [w for w in re.split(r'[\s_()\-"]+', norm_fn) if len(w) >= 2 and not w.endswith('.mp3')]
+        fn_clean_words = [re.sub(r'^\d+', '', w) for w in fn_raw_words]
+        
+        # Stop-words that should not be used as the sole criteria for crawling
+        DATE_AND_GENERIC_STOPWORDS = {
+            'הרב', 'הרבע', 'שנת', 'שנה', 'שיעורי', 'הישיבה', 'השבוע', 'ארכיון', 'סדר', 'בסדר',
+            'תשפ', 'תשפא', 'תשפב', 'תשפג', 'תשפד', 'תשפה', 'תשפו', 'תשפז', 'תשפח', 'תשפט',
+            'תשע', 'תשעו', 'תשעז', 'תשעח', 'תשעט',
+            'תשרי', 'חשון', 'חשוון', 'כסלו', 'טבת', 'שבט', 'אדר', 'ניסן', 'אייר', 'סיון', 'סיוון', 'תמוז', 'אב', 'אלול'
+        }
+        
+        specific_keywords = [w for w in fn_clean_words if len(w) >= 2 and w not in DATE_AND_GENERIC_STOPWORDS]
+        if not specific_keywords:
+            specific_keywords = [w for w in fn_clean_words if len(w) >= 3]
 
-        candidate_folders = []
+        scored_candidates = []
         for fold in all_folders:
             fold_name_norm = normalize_hebrew_string(fold.get("name", "")).lower()
             fold_bread_norm = normalize_hebrew_string(fold.get("breadcrumb", "")).lower()
-            if any(w in fold_name_norm or w in fold_bread_norm for w in all_search_words):
-                candidate_folders.append(fold)
+            score = 0
+            for kw in specific_keywords:
+                # Full keyword match
+                if kw in fold_name_norm:
+                    score += 5
+                elif kw in fold_bread_norm:
+                    score += 3
+                # Stem / prefix match for 3+ letters (e.g. אגרת <-> אגרות)
+                elif len(kw) >= 3:
+                    stem = kw[:3]
+                    if stem in fold_name_norm:
+                        score += 3
+                    elif stem in fold_bread_norm:
+                        score += 1
 
-        for cand_fold in candidate_folders:
+            if score > 0:
+                scored_candidates.append((score, fold))
+
+        # Sort highest score first, and inspect top 25 candidate folders max to prevent CIFS network timeouts (<0.2s)
+        scored_candidates.sort(key=lambda x: x[0], reverse=True)
+        for _, cand_fold in scored_candidates[:25]:
             f_path = Path(cand_fold.get("full_path", ""))
             try:
                 if f_path.is_dir():
@@ -1094,7 +1145,7 @@ def locate_lesson_file(
                         return fuzzy_p
                     with os.scandir(str(f_path)) as it:
                         for entry in it:
-                            if entry.is_file() and hebrew_compare_key(entry.name) == fn_key:
+                            if entry.is_file() and hebrew_keys_match(entry.name, clean_fn):
                                 found = Path(entry.path)
                                 _FILE_LOCATION_CACHE[clean_fn] = found
                                 _FILE_LOCATION_CACHE[fn_key] = found
@@ -1120,7 +1171,7 @@ def locate_lesson_file(
                         try:
                             with os.scandir(entry.path) as sub_it:
                                 for sub_entry in sub_it:
-                                    if sub_entry.is_file() and hebrew_compare_key(sub_entry.name) == fn_key:
+                                    if sub_entry.is_file() and hebrew_keys_match(sub_entry.name, clean_fn):
                                         found = Path(sub_entry.path)
                                         _FILE_LOCATION_CACHE[clean_fn] = found
                                         _FILE_LOCATION_CACHE[fn_key] = found
@@ -1134,7 +1185,7 @@ def locate_lesson_file(
                                         try:
                                             with os.scandir(sub_entry.path) as sub2_it:
                                                 for sub2_entry in sub2_it:
-                                                    if sub2_entry.is_file() and hebrew_compare_key(sub2_entry.name) == fn_key:
+                                                    if sub2_entry.is_file() and hebrew_keys_match(sub2_entry.name, clean_fn):
                                                         found = Path(sub2_entry.path)
                                                         _FILE_LOCATION_CACHE[clean_fn] = found
                                                         _FILE_LOCATION_CACHE[fn_key] = found
@@ -1197,6 +1248,11 @@ def get_lesson_details_for_edit(
         topic = "_".join(parts[1:]).strip()
     elif len(parts) == 1:
         rabbi = parts[0].strip()
+
+    # Clean leading track numbers from rabbi name (e.g. '01הרב אלישיב' -> 'הרב אלישיב', '49הרב דרור' -> 'הרב דרור')
+    clean_rabbi = re.sub(r'^\d+[\s_.\-]*', '', rabbi)
+    if clean_rabbi:
+        rabbi = clean_rabbi
 
     if not hebrew_date:
         file_dt = extract_recording_datetime(file_path)

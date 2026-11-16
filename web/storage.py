@@ -15,10 +15,73 @@ NOTES_FILE = config.DATA_DIR / "notes.json"
 RECORDER_SOURCES_FILE = config.DATA_DIR / "recorder_sources.json"
 _RECORDER_SOURCES_CACHE: Optional[Dict[str, str]] = None
 
+def decode_raw_label(raw_label: Optional[str]) -> str:
+    """
+    Decodes raw drive labels that might contain hex escapes (e.g. '\\x8e\\x97\\x8c\\x88 4'),
+    octal escapes, CP862 (Hebrew DOS OEM) bytes, CP1255, or Latin-1 artifacts.
+    """
+    if not raw_label:
+        return ""
+    s = str(raw_label).strip()
+
+    # 1. Handle hex escapes like \x8e\x97\x8c\x88 or \x8e\x97\x8c\x88\ 4
+    if r'\x' in s or r'\X' in s:
+        try:
+            def rep_hex(m):
+                hex_str = m.group(0)
+                byte_vals = bytes.fromhex(re.sub(r'\\[xX]', '', hex_str))
+                for enc in ('cp862', 'cp1255', 'utf-8'):
+                    try:
+                        return byte_vals.decode(enc)
+                    except Exception:
+                        pass
+                return hex_str
+            s = re.sub(r'(?:\\[xX][0-9a-fA-F]{2})+', rep_hex, s)
+        except Exception:
+            pass
+
+    # 2. Handle octal escapes like \216\227\214\210 (common in blkid / lsblk)
+    if re.search(r'\\[0-3][0-7]{2}', s):
+        try:
+            def rep_oct(m):
+                oct_str = m.group(0).replace('\\', '')
+                byte_val = bytes([int(oct_str, 8)])
+                for enc in ('cp862', 'cp1255', 'utf-8'):
+                    try:
+                        return byte_val.decode(enc)
+                    except Exception:
+                        pass
+                return m.group(0)
+            s = re.sub(r'(?:\\[0-3][0-7]{2})+', rep_oct, s)
+        except Exception:
+            pass
+
+    # 3. Handle high-byte characters (ord >= 0x80) misread as Latin-1
+    if any(0x80 <= ord(c) <= 0xFF for c in s):
+        try:
+            raw_bytes = s.encode('latin1')
+            for enc in ('cp862', 'cp1255', 'utf-8'):
+                try:
+                    decoded = raw_bytes.decode(enc)
+                    if any('֐' <= c <= '׿' for c in decoded):
+                        s = decoded
+                        break
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # Clean escaped spaces or backslashes like '\ 4' or '4\'
+    s = s.replace('\\', ' ')
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
 def normalize_recorder_label(raw_label: Optional[str]) -> Optional[str]:
     """
     Cleans and normalizes various recorder naming conventions into a clean Hebrew label.
+    Decodes CP862/hex escapes automatically.
     Examples:
+    - '\\x8e\\x97\\x8c\\x88 4' -> 'מקלט 4'
     - 'מקלט 4', 'מקלט_4', 'מקלט-4', 'מקלט4' -> 'מקלט 4'
     - 'RECORDER 4', 'RECORDER_4', 'REC-4', 'REC4' -> 'מקלט 4'
     - 'MIKLET 4', 'MEKALET 4', 'MIKLET_4' -> 'מקלט 4'
@@ -28,7 +91,7 @@ def normalize_recorder_label(raw_label: Optional[str]) -> Optional[str]:
     """
     if not raw_label:
         return None
-    clean = raw_label.strip()
+    clean = decode_raw_label(raw_label)
     if not clean:
         return None
     generic = {
@@ -81,7 +144,21 @@ def get_recorder_sources() -> Dict[str, str]:
         return {}
     try:
         with open(RECORDER_SOURCES_FILE, "r", encoding="utf-8") as f:
-            _RECORDER_SOURCES_CACHE = json.load(f)
+            raw = json.load(f)
+            cleaned = {}
+            modified = False
+            for k, v in raw.items():
+                norm = normalize_recorder_label(v) or v
+                cleaned[k] = norm
+                if norm != v:
+                    modified = True
+            _RECORDER_SOURCES_CACHE = cleaned
+            if modified:
+                try:
+                    with open(RECORDER_SOURCES_FILE, "w", encoding="utf-8") as fw:
+                        json.dump(cleaned, fw, ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
             return dict(_RECORDER_SOURCES_CACHE)
     except Exception:
         _RECORDER_SOURCES_CACHE = {}
@@ -91,12 +168,12 @@ def get_recorder_source(filename: str, filepath: Optional[Path] = None) -> Optio
     sources = get_recorder_sources()
     clean_fn = os.path.basename(filename.replace('\\', '/'))
     if clean_fn in sources:
-        return sources[clean_fn]
+        return normalize_recorder_label(sources[clean_fn]) or sources[clean_fn]
 
     # Check base filename without duplicate suffix e.g. '_1.mp3', '_2.mp3'
     base_match = re.sub(r'_\d+\.mp3$', '.mp3', clean_fn, flags=re.IGNORECASE)
     if base_match != clean_fn and base_match in sources:
-        return sources[base_match]
+        return normalize_recorder_label(sources[base_match]) or sources[base_match]
 
     # Try reading from ID3 tag if filepath exists
     if filepath and filepath.exists() and filepath.suffix.lower() == ".mp3":
