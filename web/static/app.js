@@ -358,19 +358,17 @@ function renderPendingFolders() {
         `;
     }
 
-    // 2. "Upload Lessons" card
-    if (uploadLessons.length > 0 || totalSources <= 1) {
-        const isUploadSelected = (currentPendingSource === 'upload');
-        cardsHtml += `
-            <div class="folder-card ${isUploadSelected ? 'selected' : ''}" onclick="selectPendingFolder('upload')">
-                <span class="folder-icon">📤</span>
-                <div style="flex: 1; min-width: 0;">
-                    <div class="folder-name" title="העלאת שיעורים">העלאת שיעורים</div>
-                    <div class="folder-sub">${uploadLessons.length > 0 ? uploadLessons.length + ' שיעורים' : 'אין שיעורים'}</div>
-                </div>
+    // 2. "Upload Lessons" card (always visible so users can access uploaded lessons anytime)
+    const isUploadSelected = (currentPendingSource === 'upload');
+    cardsHtml += `
+        <div class="folder-card ${isUploadSelected ? 'selected' : ''}" onclick="selectPendingFolder('upload')">
+            <span class="folder-icon">📤</span>
+            <div style="flex: 1; min-width: 0;">
+                <div class="folder-name" title="העלאת שיעורים">העלאת שיעורים</div>
+                <div class="folder-sub">${uploadLessons.length > 0 ? uploadLessons.length + ' שיעורים' : 'אין שיעורים'}</div>
             </div>
-        `;
-    }
+        </div>
+    `;
 
     // 3. Separate card for EACH distinct recorder
     sortedRecorderLabels.forEach(lbl => {
@@ -512,10 +510,6 @@ function renderPendingLessons() {
         `;
         return;
     }
-            </div>
-        `;
-        return;
-    }
 
     listContainer.innerHTML = filtered.map(lesson => {
         const index = pendingLessons.indexOf(lesson);
@@ -539,7 +533,7 @@ function renderPendingLessons() {
                 <div class="card-header">
                     <div class="card-title-wrap">
                         ${sourceBadge}
-                        <span class="badge badge-hebrew-date">${escapeHtml(lesson.hebrew_date)}</span>
+                        <span class="badge badge-hebrew-date" onclick="editLessonHebrewDate('${encodeURIComponent(lesson.filename).replace(/'/g, '%27')}', '${escapeHtml(lesson.hebrew_date)}', ${index})" style="cursor: pointer; user-select: none;" title="לחץ לשינוי התאריך העברי של שיעור זה">📅 ${escapeHtml(lesson.hebrew_date)} ✏️</span>
                         <span class="badge badge-time">שעת הקלטה: <bdi dir="ltr">${escapeHtml(lesson.created_time)}</bdi></span>
                         <span class="badge badge-time">${lesson.size_mb} MB</span>
                         <span class="card-title" dir="ltr" style="unicode-bidi: isolate;"><bdi>${escapeHtml(lesson.filename)}</bdi></span>
@@ -2009,6 +2003,42 @@ async function editAllRecorderNames(encodedLabel) {
         }
     } catch (e) {
         alert("שגיאה בעדכון שם המקלט: " + e.message);
+    }
+}
+
+// Edit Lesson Hebrew Date directly from badge
+async function editLessonHebrewDate(encodedFilename, currentDate, index) {
+    const filename = decodeURIComponent(encodedFilename);
+    const newDate = prompt("ערוך תאריך עברי עבור שיעור זה (למשל: כב חשון תשפז):", currentDate || "");
+    if (!newDate || newDate.trim() === "" || newDate.trim() === currentDate) return;
+
+    const cleanDate = newDate.trim();
+    try {
+        const form = new FormData();
+        form.append("filename", filename);
+        form.append("hebrew_date", cleanDate);
+
+        const res = await fetch("/api/lessons/set_hebrew_date", { method: "POST", body: form });
+        const data = await res.json();
+        if (data.status === "success") {
+            const lesson = pendingLessons.find(l => l.filename === filename);
+            if (lesson) {
+                lesson.hebrew_date = cleanDate;
+                lesson.filename = data.new_filename;
+            }
+            const dateInput = document.getElementById(`date-${index}`);
+            if (dateInput) {
+                dateInput.value = cleanDate;
+            }
+            renderPendingFolders();
+            renderPendingLessons();
+            // Background sync from server
+            loadPendingLessons();
+        } else {
+            alert(data.message || data.detail || "שגיאה בעדכון התאריך העברי");
+        }
+    } catch (e) {
+        alert("שגיאה בעדכון התאריך: " + e.message);
     }
 }
 

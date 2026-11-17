@@ -1,4 +1,6 @@
 import os
+import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -90,7 +92,7 @@ def get_removable_mounts() -> List[Path]:
     return removable_paths
 
 
-def verify_audio_integrity(filepath: Path, expected_size: int) -> bool:
+def verify_audio_integrity(filepath: Path, expected_size: int, expected_ext: Optional[str] = None) -> bool:
     """
     Verifies that the transferred audio file is intact and not corrupted:
     1. File exists and size matches expected_size exactly.
@@ -112,7 +114,7 @@ def verify_audio_integrity(filepath: Path, expected_size: int) -> bool:
         if len(header) < 4:
             return False
 
-        ext = filepath.suffix.lower()
+        ext = (expected_ext if expected_ext else filepath.suffix).lower()
         if ext == ".mp3":
             # MP3 files start with ID3 tag or 0xFF sync frame
             if not (header.startswith(b"ID3") or header[0] == 0xFF):
@@ -334,7 +336,7 @@ def copy_and_verify_from_usb(
             pass
 
         # Verification Phase: Check exact size and audio validity
-        if not verify_audio_integrity(temp_target, expected_size):
+        if not verify_audio_integrity(temp_target, expected_size, expected_ext=unique_target.suffix):
             actual_size = temp_target.stat().st_size if temp_target.exists() else 0
             raise IOError(f"Integrity check failed! Expected {expected_size} bytes, got {actual_size} bytes.")
 

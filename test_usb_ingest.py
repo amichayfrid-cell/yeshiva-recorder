@@ -16,7 +16,7 @@ def run_simulation():
     # Create a dummy audio file in simulated USB
     dummy_file = sim_usb_dir / "REC_TEST_001.mp3"
     with open(dummy_file, "wb") as f:
-        f.write(b"SIMULATED_AUDIO_DATA_FOR_TESTING_INGESTION_1234567890")
+        f.write(b"ID3\x03\x00\x00\x00\x00\x00\x00SIMULATED_AUDIO_DATA_FOR_TESTING_INGESTION_1234567890")
 
     print(f"[Sim] Created test file on simulated USB: {dummy_file}")
     print(f"[Sim] Running scan_and_ingest_path on: {sim_usb_dir}...")

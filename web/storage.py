@@ -268,11 +268,10 @@ def set_all_recorders_source(old_label: str, new_label: str):
 
     # Also explicitly map all pending files in sorting_dir matching this recorder
     try:
-        from core.watcher import get_sorting_dir
-        sorting_dir = get_sorting_dir()
+        sorting_dir = config.get_final_target_dir()
         if sorting_dir and sorting_dir.exists():
             for entry in os.scandir(sorting_dir):
-                if entry.is_file() and entry.name.lower().endswith(tuple(config.AUDIO_EXTENSIONS)):
+                if entry.is_file() and entry.name.lower().endswith(tuple(config.USB_AUDIO_EXTENSIONS)):
                     curr_lbl = sources.get(entry.name)
                     if not curr_lbl:
                         sources[entry.name] = norm_new

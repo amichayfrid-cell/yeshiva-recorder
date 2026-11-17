@@ -5,12 +5,15 @@ import config
 
 def inspect_sorted_id3_tags():
     print("=" * 60)
-    print(" inspecting ID3 Tags in data/sorted/ ")
+    print(" Inspecting ID3 Tags in staging/target directories ")
     print("=" * 60)
 
-    sorted_files = list(config.SORTED_DIR.glob("*.mp3"))
+    sorted_files = []
+    for d in (config.LOCAL_STAGING_DIR, config.NETWORK_TARGET_DIR):
+        if d.exists():
+            sorted_files.extend(d.glob("*.mp3"))
     if not sorted_files:
-        print("No MP3 files found in data/sorted/ yet.")
+        print("No MP3 files found in target directories yet.")
         return
 
     for audio_file in sorted_files:

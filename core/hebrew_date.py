@@ -281,6 +281,27 @@ def extract_audio_metadata_datetime(filepath: Union[str, Path]) -> Optional[date
 
     return None
 
+def extract_sony_icd_datetime(file_path: Union[str, Path]) -> Optional[datetime]:
+    """
+    Extracts Sony IC Recorder (ICD-UX570, ICD-PX470, etc.) hardware recording timestamp
+    directly from the ID3/GEOB header chunk. Takes <0.001s by reading only the first 4KB.
+    """
+    try:
+        p = Path(file_path) if isinstance(file_path, (str, Path)) else None
+        if not p or not p.is_file():
+            return None
+        with open(p, "rb") as f:
+            chunk = f.read(4096)
+        if chunk.startswith(b"ID3"):
+            m = re.search(rb'(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])[T ]([01]\d|2[0-3]):([0-5]\d):([0-5]\d)', chunk)
+            if m:
+                y, mo, d, h, mi, s = (int(m.group(i)) for i in range(1, 7))
+                if 2000 <= y <= 2040:
+                    return datetime(y, mo, d, h, mi, s)
+    except Exception:
+        pass
+    return None
+
 def extract_recording_datetime(
     filepath: Union[str, Path], 
     stat_obj: Optional[os.stat_result] = None
@@ -288,11 +309,11 @@ def extract_recording_datetime(
     """
     Master function: Extracts the true recording datetime of an audio file.
     Hierarchy:
-    1. Audio file internal metadata (ID3v2, RIFF bext, MP4).
-    2. Full date & time embedded in filename.
+    1. Full date & time embedded in filename.
+    2. Sony IC Recorder internal hardware metadata (GEOB/ID3).
     3. Time-only embedded in filename combined with file stat date.
     4. Original recorder file system modification timestamp (st_mtime / st_ctime).
-    5. Fallback to current datetime.
+    5. Fallback to audio metadata or current datetime.
     """
     p = Path(filepath) if isinstance(filepath, (str, Path)) else None
     fn = p.name if p else str(filepath)
@@ -301,6 +322,12 @@ def extract_recording_datetime(
     fn_dt = parse_filename_datetime(fn)
     if fn_dt and 2000 <= fn_dt.year <= 2040:
         return fn_dt
+
+    # 2. Check Sony IC Recorder embedded hardware timestamp (reading only 4KB)
+    if p and p.is_file() and p.suffix.lower() == ".mp3":
+        sony_dt = extract_sony_icd_datetime(p)
+        if sony_dt:
+            return sony_dt
 
     # 2. File system modification timestamp (already in memory from os.scandir)
     base_dt = None

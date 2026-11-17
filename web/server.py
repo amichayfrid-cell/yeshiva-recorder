@@ -14,7 +14,7 @@ from pathlib import Path
 import secrets
 from datetime import datetime, timedelta
 import unicodedata
-from typing import Optional, List, Dict, Any, Tuple, Union
+from typing import Optional, List, Dict, Any, Tuple, Union, Set
 
 from fastapi import FastAPI, Request, Form, Depends, HTTPException, status, Query
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, RedirectResponse, FileResponse, Response
@@ -77,9 +77,11 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "Audio8")
 COOKIE_NAME = "yeshiva_session"
+ACTIVE_SESSIONS: Set[str] = set()
 
 def is_authenticated(request: Request) -> bool:
-    return request.cookies.get(COOKIE_NAME) == ADMIN_PASSWORD
+    token = request.cookies.get(COOKIE_NAME)
+    return bool(token and token in ACTIVE_SESSIONS)
 
 def is_network_share_mounted() -> bool:
     """Checks if network share is mounted and non-empty (resilient against older config.py versions)."""
@@ -100,6 +102,27 @@ def get_sorting_dir() -> Path:
     if is_network_share_mounted() and config.NETWORK_TARGET_DIR.exists():
         return config.NETWORK_TARGET_DIR
     return config.LOCAL_STAGING_DIR
+
+def _is_safe_lesson_path(file_path: Path) -> bool:
+    """Validates that file_path is contained within config.DATA_DIR, config.NETWORK_MOUNT_POINT, or config.NETWORK_UPLOAD_MOUNT."""
+    allowed_roots = [
+        config.DATA_DIR,
+        config.NETWORK_MOUNT_POINT,
+        getattr(config, "NETWORK_UPLOAD_MOUNT", None),
+    ]
+    try:
+        resolved_file = file_path.resolve()
+    except OSError:
+        return False
+    for root in allowed_roots:
+        if root is None:
+            continue
+        try:
+            if resolved_file.is_relative_to(root.resolve()):
+                return True
+        except Exception:
+            pass
+    return False
 
 TRANSCODED_CACHE_DIR = config.DATA_DIR / "transcoded_cache"
 TRANSCODED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -394,15 +417,20 @@ def login_page(request: Request, error: Optional[str] = None):
 
 @app.post("/login")
 def process_login(password: str = Form(...)):
-    if password == ADMIN_PASSWORD:
+    if secrets.compare_digest(password, ADMIN_PASSWORD):
+        session_token = secrets.token_urlsafe(32)
+        ACTIVE_SESSIONS.add(session_token)
         response = RedirectResponse(url="/admin", status_code=status.HTTP_302_FOUND)
         # Session cookie: deleted when browser is closed
-        response.set_cookie(key=COOKIE_NAME, value=ADMIN_PASSWORD, httponly=True)
+        response.set_cookie(key=COOKIE_NAME, value=session_token, httponly=True, samesite="lax")
         return response
     return RedirectResponse(url="/login?error=1", status_code=status.HTTP_302_FOUND)
 
 @app.get("/logout")
-def logout():
+def logout(request: Request):
+    token = request.cookies.get(COOKIE_NAME)
+    if token:
+        ACTIVE_SESSIONS.discard(token)
     response = RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     response.delete_cookie(key=COOKIE_NAME)
     response.delete_cookie(key="yeshiva_admin_auth")
@@ -630,6 +658,43 @@ def set_recorder_source(
 
     invalidate_pending_lessons_cache()
     return JSONResponse({"status": "success", "filename": clean_fn, "recorder_label": clean_label})
+
+@app.post("/api/lessons/set_hebrew_date")
+def set_lesson_hebrew_date(
+    request: Request,
+    filename: str = Form(...),
+    hebrew_date: str = Form(...)
+):
+    if not is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    clean_fn = os.path.basename(filename.replace('\\', '/'))
+    clean_date = hebrew_date.strip().replace('/', '-')
+    if not clean_date:
+        raise HTTPException(status_code=400, detail="Hebrew date cannot be empty")
+
+    file_path = locate_lesson_file(clean_fn)
+    if not file_path or not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    if not _is_safe_lesson_path(file_path):
+        raise HTTPException(status_code=403, detail="Forbidden: file path is outside allowed directories")
+
+    m = re.match(r'^\(([^)]+)\)\s*(.+)$', file_path.name)
+    if m:
+        new_name = f"({clean_date}) {m.group(2)}"
+    else:
+        new_name = f"({clean_date}) {file_path.name}"
+
+    new_path = file_path.parent / new_name
+    try:
+        os.replace(str(file_path), str(new_path))
+        rec = storage.get_recorder_source(file_path.name)
+        if rec:
+            storage.set_recorder_source(new_name, rec)
+        invalidate_pending_lessons_cache()
+        return JSONResponse({"status": "success", "old_filename": clean_fn, "new_filename": new_name, "hebrew_date": clean_date})
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 @app.get("/api/audio/stream")
 def stream_audio(request: Request, filename: str = Query(...), source_path: Optional[str] = Query(None)):
@@ -1328,6 +1393,8 @@ def update_lesson(
             source_file = resolved_src
         else:
             raise HTTPException(status_code=404, detail="Source file not found")
+    if not _is_safe_lesson_path(source_file):
+        raise HTTPException(status_code=403, detail="Forbidden: file path is outside allowed directories")
 
     dest_dir = Path(destination_folder)
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -1396,6 +1463,8 @@ def delete_lesson(
     file_path = locate_lesson_file(source_path or filename, original_path=source_path)
     if not file_path or not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
+    if not _is_safe_lesson_path(file_path):
+        raise HTTPException(status_code=403, detail="Forbidden: file path is outside allowed directories")
 
     try:
         parent_dir = file_path.parent

@@ -54,8 +54,8 @@ umount "$MOUNT_POINT" 2>/dev/null || true
 mount -t cifs "$SHARE_PATH" "$MOUNT_POINT" \
   -o credentials="$CRED_FILE",iocharset=utf8,file_mode=0777,dir_mode=0777,vers=3.0,noperm
 
-# 6. יצירת תיקיית 'שיעורים למיון' בשיתוף
-TARGET_DIR="$MOUNT_POINT/שיעורים למיון"
+# 6. יצירת תיקיית 'שיעורי השבוע' בשיתוף
+TARGET_DIR="$MOUNT_POINT/שיעורי השבוע"
 if [ ! -d "$TARGET_DIR" ]; then
     echo "[*] יוצר תיקיית יעד: $TARGET_DIR..."
     mkdir -p "$TARGET_DIR"
