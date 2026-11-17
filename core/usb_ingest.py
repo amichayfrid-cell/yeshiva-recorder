@@ -231,11 +231,12 @@ def get_drive_label(drive_path: Path) -> str:
         except Exception:
             pass
 
-    # 4. Check mount point name itself
+    # 4. Check mount point name itself (skip auto-generated Linux /media/usb_sdX1 names)
     mount_name = drive_path.name
-    normalized_mount = storage.normalize_recorder_label(mount_name)
-    if normalized_mount:
-        return normalized_mount
+    if not re.fullmatch(r'usb_sd[a-z][0-9]*', mount_name, re.IGNORECASE):
+        normalized_mount = storage.normalize_recorder_label(mount_name)
+        if normalized_mount:
+            return normalized_mount
 
     # 5. Linux USB drive partition number/letter mapping (e.g. sdb1 -> מקלט 1, sdc1 -> מקלט 2, sdd1 -> מקלט 3, sde1 -> מקלט 4)
     try:
