@@ -104,20 +104,23 @@ def parse_iso_or_flexible_datetime(s: str) -> Optional[datetime]:
         return None
     s = s.strip()
     formats = [
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%dT%H:%M:%SZ",
-        "%Y-%m-%dT%H:%M",
-        "%Y-%m-%d",
-        "%Y%m%d_%H%M%S",
-        "%Y%m%d_%H%M",
-        "%Y%m%d%H%M%S",
-        "%Y%m%d"
+        ("%Y-%m-%d %H:%M:%S", None),
+        ("%Y-%m-%d %H:%M", None),
+        ("%Y-%m-%dT%H:%M:%S", None),
+        ("%Y-%m-%dT%H:%M:%SZ", None),
+        ("%Y-%m-%dT%H:%M", None),
+        ("%Y-%m-%d", None),
+        ("%Y%m%d_%H%M%S", 15),
+        ("%Y%m%d_%H%M", 13),
+        ("%Y%m%d%H%M%S", 14),
+        ("%Y%m%d", 8),
     ]
-    for fmt in formats:
+    for fmt, exact_len in formats:
+        candidate = s[:len(fmt) + 2].rstrip("Z")
+        if exact_len is not None and len(s.rstrip("Z")) != exact_len:
+            continue
         try:
-            return datetime.strptime(s[:len(fmt) + 2].rstrip("Z"), fmt)
+            return datetime.strptime(candidate, fmt)
         except (ValueError, TypeError):
             continue
     return None

@@ -53,6 +53,7 @@ def test_extract_hebrew_date_from_filename_and_clean():
         ("2026-11-14T11:02", datetime(2026, 11, 14, 11, 2)),
         ("2026-11-14", datetime(2026, 11, 14, 0, 0)),
         ("20261114_110230", datetime(2026, 11, 14, 11, 2, 30)),
+        ("20261114_1102", datetime(2026, 11, 14, 11, 2)),
         ("2026-11-14 11:02", datetime(2026, 11, 14, 11, 2)),
         ("", None),
         ("invalid-date", None),

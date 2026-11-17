@@ -58,11 +58,17 @@ def test_get_drive_label_strategies(tmp_path: Path, monkeypatch):
     (d1 / "מקלט 4.txt").write_text("", encoding="utf-8")
     assert usb_ingest.get_drive_label(d1) == "מקלט 4"
 
-    # 2. Identifier .ini filename
+    # 2. Content inside recorder.txt
     d2 = tmp_path / "drive2"
     d2.mkdir()
-    (d2 / "RECORDER_7.ini").write_text("", encoding="utf-8")
+    (d2 / "recorder.txt").write_text("RECORDER_7\nextra line", encoding="utf-8")
     assert usb_ingest.get_drive_label(d2) == "מקלט 7"
+
+    # 2b. Identifier .ini filename
+    d2b = tmp_path / "drive2b"
+    d2b.mkdir()
+    (d2b / "RECORDER_8.ini").write_text("", encoding="utf-8")
+    assert usb_ingest.get_drive_label(d2b) == "מקלט 8"
 
     # 3. Directory / mount point name
     d3 = tmp_path / "MIKLET 3"
@@ -134,7 +140,7 @@ def test_scan_and_ingest_path_recursive(tmp_path: Path):
 
     (usb_root / "מקלט 5.txt").write_text("", encoding="utf-8")
     (usb_root / ".hidden.mp3").write_bytes(make_valid_mp3_bytes())
-    (usb_root / "notes.pdf").write_text("ignore me", encoding="utf-8")
+    (usb_root / "notes.txt").write_text("ignore me", encoding="utf-8")
     mp3_a = sub / "REC_01.mp3"
     wav_b = sub / "REC_02.wav"
     mp3_a.write_bytes(make_valid_mp3_bytes())

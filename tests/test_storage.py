@@ -14,7 +14,8 @@ from web import storage
 def test_decode_raw_label_hex_octal_and_latin1():
     # CP862 bytes for "מקלט" are \x8e\x97\x8c\x88
     assert storage.decode_raw_label(r"\x8e\x97\x8c\x88 4") == "מקלט 4"
-    # Octal single-byte escape: 0x8e=216 -> CP862 'מ'
+    # Octal multi-byte and single-byte escapes: 0x8e=216, 0x97=227, 0x8c=214, 0x88=210 -> CP862 'מקלט'
+    assert storage.decode_raw_label(r"\216\227\214\210 4") == "מקלט 4"
     assert storage.decode_raw_label(r"\216 4") == "מ 4"
     # Latin1-misread CP1255 bytes for "מקלט"
     latin1_misread = "מקלט 2".encode("cp1255").decode("latin1")
@@ -29,7 +30,9 @@ def test_normalize_recorder_label_variants_and_aliases():
     assert storage.normalize_recorder_label("MIKLET 4") == "מקלט 4"
     assert storage.normalize_recorder_label("04") == "מקלט 4"
     assert storage.normalize_recorder_label("בית מדרש") == "מקלט בית מדרש"
+    assert storage.normalize_recorder_label("מקלט בית מדרש") == "מקלט בית מדרש"
     assert storage.normalize_recorder_label("מקלט ראשי") == "מקלט ראשי"
+    assert storage.normalize_recorder_label("recorder") is None
 
     # Generic / drive-letter artifacts should return None
     assert storage.normalize_recorder_label("SANDISK") is None
@@ -62,10 +65,10 @@ def test_recorder_sources_crud_and_fallbacks():
     pending_mp3 = config.LOCAL_STAGING_DIR / "pending_a.mp3"
     pending_mp3.write_bytes(make_valid_mp3_bytes())
     storage.set_recorder_source("other.mp3", "מקלט 3")
-    storage.set_all_recorders_source("מקלט 3", "ראשי")
-    assert storage.get_recorder_source("lesson.mp3") == "מקלט ראשי"
-    assert storage.get_recorder_source("other.mp3") == "מקלט ראשי"
-    assert storage.get_recorder_source("pending_a.mp3") == "מקלט ראשי"
+    storage.set_all_recorders_source("מקלט 3", "בית מדרש")
+    assert storage.get_recorder_source("lesson.mp3") == "מקלט בית מדרש"
+    assert storage.get_recorder_source("other.mp3") == "מקלט בית מדרש"
+    assert storage.get_recorder_source("pending_a.mp3") == "מקלט בית מדרש"
 
     storage.remove_recorder_source("lesson.mp3")
     assert storage.get_recorder_source("lesson.mp3") is None

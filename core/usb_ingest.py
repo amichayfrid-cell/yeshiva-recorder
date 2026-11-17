@@ -155,17 +155,7 @@ def get_drive_label(drive_path: Path) -> str:
     # 1. Check for identifier files on the root of the USB drive
     try:
         if drive_path.exists() and drive_path.is_dir():
-            # Check for files like 'מקלט 4.txt', 'מקלט4.txt', 'recorder_4.txt'
-            for item in drive_path.iterdir():
-                if item.is_file():
-                    name_lower = item.name.lower()
-                    if name_lower.endswith((".txt", ".ini", ".id")):
-                        base_stem = item.stem
-                        normalized = storage.normalize_recorder_label(base_stem)
-                        if normalized:
-                            return normalized
-
-            # Check content of standard id files (e.g. recorder.txt)
+            # First check content of standard id files (e.g. recorder.txt)
             for id_filename in ["recorder.txt", "id.txt", "name.txt", "label.txt", "מקלט.txt", "device.txt"]:
                 id_file = drive_path / id_filename
                 if id_file.exists() and id_file.is_file():
@@ -180,6 +170,24 @@ def get_drive_label(drive_path: Path) -> str:
                                 return normalized
                     except Exception:
                         pass
+
+            # Then check explicit recorder identifier filenames like 'מקלט 4.txt', 'recorder_4.ini'
+            aliases = storage.get_recorder_aliases()
+            for item in drive_path.iterdir():
+                if item.is_file():
+                    name_lower = item.name.lower()
+                    if name_lower.endswith((".txt", ".ini", ".id")):
+                        base_stem = item.stem.strip()
+                        is_explicit_id = (
+                            "מקלט" in base_stem
+                            or base_stem in aliases
+                            or bool(re.fullmatch(r'(?:recorder|miklet|mekalet|rec|dok|usb)[\s_-]*(?:[0-9]+|[a-zA-Z]|[א-ת])', base_stem, re.IGNORECASE))
+                            or bool(re.fullmatch(r'0*[1-9][0-9]*', base_stem))
+                        )
+                        if is_explicit_id:
+                            normalized = storage.normalize_recorder_label(base_stem)
+                            if normalized:
+                                return normalized
     except Exception:
         pass
 

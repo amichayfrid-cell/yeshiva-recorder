@@ -81,11 +81,10 @@ def decode_raw_label(raw_label: Optional[str]) -> str:
     if re.search(r'\\[0-3][0-7]{2}', s):
         try:
             def rep_oct(m):
-                oct_str = m.group(0).replace('\\', '')
-                byte_val = bytes([int(oct_str, 8)])
+                byte_vals = bytes(int(o, 8) for o in re.findall(r'[0-3][0-7]{2}', m.group(0)))
                 for enc in ('cp862', 'cp1255', 'utf-8'):
                     try:
-                        return byte_val.decode(enc)
+                        return byte_vals.decode(enc)
                     except Exception:
                         pass
                 return m.group(0)
@@ -143,7 +142,8 @@ def normalize_recorder_label(raw_label: Optional[str]) -> Optional[str]:
     generic = {
         'NO NAME', 'NONAME', 'UNTITLED', 'USB DISK', 'USB DRIVE', 'REMOVABLE',
         'TRANSCEND', 'SANDISK', 'KINGSTON', 'FAT32', 'FAT16', 'EXFAT', 'VOLUME',
-        'NEW VOLUME', 'LOCAL DISK', 'DISK', 'USB', 'SD', 'DRIVE'
+        'NEW VOLUME', 'LOCAL DISK', 'DISK', 'USB', 'SD', 'DRIVE',
+        'RECORDER', 'MIKLET', 'MEKALET', 'ID', 'NAME', 'LABEL', 'DEVICE'
     }
     if clean.upper() in generic:
         return None
@@ -154,16 +154,17 @@ def normalize_recorder_label(raw_label: Optional[str]) -> Optional[str]:
     if re.fullmatch(r'מקלט\s+[a-zA-Z]', clean, re.IGNORECASE):
         return None
 
-    # Check Hebrew pattern: 'מקלט X'
-    m_heb = re.search(r'מקלט[\s_-]*([0-9א-ת]+|[a-zA-Z]+)?', clean)
+    # Check Hebrew pattern: 'מקלט X' (supports multi-word names like 'מקלט בית מדרש')
+    m_heb = re.fullmatch(r'מקלט[\s_-]*(.+)?', clean)
     if m_heb:
         suffix = m_heb.group(1)
         if suffix:
-            return f"מקלט {suffix.strip()}"
+            clean_suffix = re.sub(r'[\s_-]+', ' ', suffix).strip()
+            return f"מקלט {clean_suffix}" if clean_suffix else clean
         return clean
 
     # Check English pattern: 'RECORDER X', 'REC X', 'MIKLET X'
-    m_eng = re.search(r'(?:RECORDER|MIKLET|MEKALET|REC|DOK|USB)[\s_-]*([0-9]+|[a-zA-Z]|א-ת)', clean, re.IGNORECASE)
+    m_eng = re.fullmatch(r'(?:RECORDER|MIKLET|MEKALET|REC|DOK|USB)[\s_-]*([0-9]+|[a-zA-Z]|[א-ת])', clean, re.IGNORECASE)
     if m_eng:
         val = m_eng.group(1).strip()
         return f"מקלט {val}"
